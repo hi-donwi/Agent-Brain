@@ -1,4 +1,4 @@
-.PHONY: build install test race vet fmt fmt-check tidy-check cross static-check vulncheck smoke check clean
+.PHONY: build install test race vet fmt fmt-check tidy-check cross static-check vulncheck smoke check clean release
 
 BINARY  := lokal
 PKG     := github.com/hi-donwi/Agent-Local
@@ -72,8 +72,19 @@ smoke: build
 	./bin/$(BINARY) doctor || [ $$? -eq 1 ]
 	./bin/$(BINARY) doctor --json > /dev/null || [ $$? -eq 1 ]
 
+release: cross
+	@mkdir -p dist
+	@for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
+		archive=dist/$(BINARY)-$$os-$$arch.tar.gz; \
+		echo "Packaging $$archive..."; \
+		tar -czf $$archive -C bin $(BINARY)-$$os-$$arch$$ext; \
+	done
+	@cd dist && (shasum -a 256 * > SHA256SUMS 2>/dev/null || sha256sum * > SHA256SUMS)
+	@echo "Release artifacts and SHA256SUMS ready in dist/"
+
 # The same steps CI runs on every push, in the same order.
 check: fmt-check tidy-check vet race smoke
 
 clean:
-	rm -rf bin coverage.out
+	rm -rf bin dist coverage.out
