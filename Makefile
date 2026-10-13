@@ -16,8 +16,9 @@ LDFLAGS := -s -w \
 export CGO_ENABLED := 0
 
 # Pinned: govulncheck is a security gate; a floating @latest would let the scanner
-# itself change without review.
-GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.1.4
+# itself change without review. v1.1.4 panics building SSA for the Go 1.27 standard
+# library, so the pin must move with the newest Go release CI uses.
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 
