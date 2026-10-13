@@ -1,0 +1,20 @@
+[
+  {
+    "id": "q1",
+    "query": "how do I configure loopback security and bearer tokens in lokal?",
+    "expected_path": "docs/security.md",
+    "relevant_text": "bearer token mode 0600"
+  },
+  {
+    "id": "q2",
+    "query": "what is the default database used for local embeddings and retrieval?",
+    "expected_path": "docs/architecture.md",
+    "relevant_text": "SQLite database in WAL mode"
+  },
+  {
+    "id": "q3",
+    "query": "how to connect from a workstation over an ssh tunnel to the gateway?",
+    "expected_path": "docs/remote.md",
+    "relevant_text": "ssh -N -L 52140:127.0.0.1:52140"
+  }
+]
