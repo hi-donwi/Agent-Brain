@@ -1,0 +1,13 @@
+Agent-Local (lokal)
+Copyright 2026 Doni Wicaksono
+
+This product includes software developed by Doni Wicaksono
+(https://github.com/hi-donwi/Agent-Local).
+
+Licensed under the Apache License, Version 2.0. A copy is in the LICENSE file,
+or at http://www.apache.org/licenses/LICENSE-2.0.
+
+lokal is distributed as a statically linked binary that embeds third-party
+open-source Go modules. Each keeps its own licence; see go.mod for the list.
+lokal does not distribute model weights. Models it downloads on your behalf
+are fetched from their publishers under their own licences.
