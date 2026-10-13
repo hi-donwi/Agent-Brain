@@ -56,4 +56,4 @@ fails if the Linux binaries are not statically linked (`make static-check`).
 ## Follow-up
 
 - [x] `make static-check` and the `cross-compile` CI job enforce this
-- [ ] M7: `THIRD_PARTY_LICENSES.md` generated from the module graph, as OPS-Toolkit does
+- [ ] M9: `THIRD_PARTY_LICENSES.md` generated from the module graph, as OPS-Toolkit does

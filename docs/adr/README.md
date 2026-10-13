@@ -1,7 +1,9 @@
 # Architecture decision records
 
-Decisions that are expensive to reverse. An ADR is never edited after it is accepted
-except to mark it superseded; a changed decision gets a new ADR that names the old one.
+Decisions that are expensive to reverse. The decision in an accepted ADR is never
+edited; a changed decision gets a new ADR that names the old one, and the old one is
+marked superseded. Editorial fixes that do not change the decision, such as milestone
+numbers after the roadmap is renumbered, are allowed.
 
 | ADR | Decision | Status |
 |---|---|---|
@@ -11,6 +13,7 @@ except to mark it superseded; a changed decision gets a new ADR that names the o
 | [0004](0004-agent-skills-format-and-progressive-disclosure.md) | Skills use the Agent Skills SKILL.md format, loaded by progressive disclosure | Accepted |
 | [0005](0005-learned-skills-require-human-promotion.md) | Learned skills are untrusted candidates until a human promotes them | Accepted |
 | [0006](0006-local-only-by-default.md) | Local only by default: loopback, per-process token, no egress, no telemetry | Accepted |
+| [0007](0007-agent-runtime-coding-and-multi-agent-scope.md) | lokal includes an agent runtime, a coding agent, and multi-agent orchestration; UIs stay outside | Proposed |
 
 New ADRs use the next number and the same sections: Context, Decision, Consequences
 (positive, negative, neutral), Alternatives considered, Follow-up.

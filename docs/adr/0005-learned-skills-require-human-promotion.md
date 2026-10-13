@@ -6,7 +6,7 @@
 
 ## Context
 
-The skill forge (M6) turns repeated, successful work recorded in agent traces into new
+The skill forge (M7) turns repeated, successful work recorded in agent traces into new
 skills, then tests and refines them. Automating this is the point, but a skill is an
 instruction the agent will follow later, with whatever tools it has.
 
@@ -62,4 +62,4 @@ instead of being compared against them.
 ## Follow-up
 
 - [ ] M5: traces record content origin per message so provenance is possible
-- [ ] M6: candidate store, eval harness, promote and rollback commands
+- [ ] M7: candidate store, eval harness, promote and rollback commands
