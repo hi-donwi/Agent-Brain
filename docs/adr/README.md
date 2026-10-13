@@ -15,6 +15,7 @@ numbers after the roadmap is renumbered, are allowed.
 | [0006](0006-local-only-by-default.md) | Local only by default: loopback, per-process token, no egress, no telemetry | Accepted |
 | [0007](0007-agent-runtime-coding-and-multi-agent-scope.md) | lokal includes an agent runtime, a coding agent, and multi-agent orchestration; UIs stay outside | Superseded by 0008 |
 | [0008](0008-local-ai-platform-agent-hosts-own-the-loop.md) | lokal is the local AI platform; agent hosts own the agent loop | Accepted |
+| [0009](0009-gateway-architecture-and-loopback-security.md) | Gateway architecture, loopback security, role routing, and context guard | Accepted |
 
 New ADRs use the next number and the same sections: Context, Decision, Consequences
 (positive, negative, neutral), Alternatives considered, Follow-up.
