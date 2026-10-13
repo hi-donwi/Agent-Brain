@@ -107,12 +107,23 @@ Follow step 1 and step 2.
 		t.Fatalf("insert chunks: %v", err)
 	}
 
+	// 3. Create code intelligence mock files in tmpDir
+	mustWriteFile(t, filepath.Join(tmpDir, "AGENTS.md"), "# Contract\nAgents follow rules.")
+	mustWriteFile(t, filepath.Join(tmpDir, "Makefile"), ".PHONY: build test\nbuild:\n\tgo build\ntest:\n\tgo test\n")
+	mustWriteFile(t, filepath.Join(tmpDir, "pkg", "service.go"), `package pkg
+type Worker struct {}
+func (w *Worker) Process() error {
+	return nil
+}
+`)
+
 	adapter := &mockAdapter{}
 	searcher := rag.NewSearcher(st, adapter)
 
 	srv := localmcp.NewServer(localmcp.Config{
 		Name:      "lokal-test",
 		Version:   "1.0.0",
+		RootDir:   tmpDir,
 		Searcher:  searcher,
 		SkillsMgr: skillsMgr,
 		Adapter:   adapter,
@@ -127,6 +138,16 @@ Follow step 1 and step 2.
 	}
 
 	return srv, cleanup
+}
+
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write file %s: %v", path, err)
+	}
 }
 
 func TestMCPToolsExecution(t *testing.T) {
@@ -197,6 +218,52 @@ func TestMCPToolsExecution(t *testing.T) {
 	textModels := resModels.Content[0].(mcp.TextContent).Text
 	if !strings.Contains(textModels, "llama3.2:3b") || !strings.Contains(textModels, "chat") {
 		t.Errorf("expected models and aliases, got: %s", textModels)
+	}
+
+	// 6. Test repo_map
+	resRepoMap, err := srv.CallTool(ctx, "repo_map", map[string]interface{}{
+		"tokens": float64(1000),
+	})
+	if err != nil {
+		t.Fatalf("call repo_map failed: %v", err)
+	}
+	textRepoMap := resRepoMap.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(textRepoMap, "Worker") {
+		t.Errorf("expected repo_map to contain Worker symbol, got: %s", textRepoMap)
+	}
+
+	// 7. Test find_symbol
+	resFindSym, err := srv.CallTool(ctx, "find_symbol", map[string]interface{}{
+		"name": "Process",
+	})
+	if err != nil {
+		t.Fatalf("call find_symbol failed: %v", err)
+	}
+	textFindSym := resFindSym.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(textFindSym, "service.go") || !strings.Contains(textFindSym, "Process") {
+		t.Errorf("expected find_symbol to locate Process, got: %s", textFindSym)
+	}
+
+	// 8. Test search_code
+	resSearchCode, err := srv.CallTool(ctx, "search_code", map[string]interface{}{
+		"pattern": "type Worker",
+	})
+	if err != nil {
+		t.Fatalf("call search_code failed: %v", err)
+	}
+	textSearchCode := resSearchCode.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(textSearchCode, "service.go") {
+		t.Errorf("expected search_code to locate service.go, got: %s", textSearchCode)
+	}
+
+	// 9. Test project_commands
+	resProjCmds, err := srv.CallTool(ctx, "project_commands", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("call project_commands failed: %v", err)
+	}
+	textProjCmds := resProjCmds.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(textProjCmds, "make test") || !strings.Contains(textProjCmds, "AGENTS.md") {
+		t.Errorf("expected project commands and instructions, got: %s", textProjCmds)
 	}
 }
 

@@ -3,9 +3,12 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Local/internal/codeintel"
 	"github.com/hi-donwi/Agent-Local/internal/rag"
 	"github.com/hi-donwi/Agent-Local/internal/skills"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -16,15 +19,17 @@ import (
 type Config struct {
 	Name      string
 	Version   string
+	RootDir   string
 	Searcher  *rag.Searcher
 	SkillsMgr *skills.Manager
 	Adapter   backend.Adapter
 	Aliases   map[string]string
 }
 
-// Server exposes lokal's knowledge, skills, and models over the Model Context Protocol.
+// Server exposes lokal's knowledge, skills, models, and code intelligence over MCP.
 type Server struct {
 	mcpServer *server.MCPServer
+	rootDir   string
 	searcher  *rag.Searcher
 	skillsMgr *skills.Manager
 	adapter   backend.Adapter
@@ -32,7 +37,7 @@ type Server struct {
 	handlers  map[string]server.ToolHandlerFunc
 }
 
-// NewServer registers read-only MCP tools and builds an MCP server instance.
+// NewServer registers read-only MCP tools and resources and builds an MCP server instance.
 func NewServer(cfg Config) *Server {
 	name := cfg.Name
 	if name == "" {
@@ -42,11 +47,20 @@ func NewServer(cfg Config) *Server {
 	if ver == "" {
 		ver = "0.0.0-dev"
 	}
+	root := cfg.RootDir
+	if root == "" {
+		root, _ = os.Getwd()
+	}
 
-	mcpSrv := server.NewMCPServer(name, ver)
+	mcpSrv := server.NewMCPServer(
+		name,
+		ver,
+		server.WithResourceCapabilities(false, false),
+	)
 
 	s := &Server{
 		mcpServer: mcpSrv,
+		rootDir:   filepath.Clean(root),
 		searcher:  cfg.Searcher,
 		skillsMgr: cfg.SkillsMgr,
 		adapter:   cfg.Adapter,
@@ -55,6 +69,7 @@ func NewServer(cfg Config) *Server {
 	}
 
 	s.registerTools()
+	s.registerResources()
 	return s
 }
 
@@ -113,6 +128,76 @@ func (s *Server) registerTools() {
 	)
 	s.mcpServer.AddTool(listModelsTool, s.handleListModels)
 	s.handlers["list_models"] = s.handleListModels
+
+	// Tool 5: repo_map
+	repoMapTool := mcp.NewTool("repo_map",
+		mcp.WithDescription("Generate a ranked outline of repository files and symbol definitions within a token budget. (Read-only)"),
+		mcp.WithNumber("tokens", mcp.Description("Maximum token budget for the repository outline (default: 2048)")),
+		mcp.WithString("path", mcp.Description("Optional path to repository directory (default: current project)")),
+	)
+	s.mcpServer.AddTool(repoMapTool, s.handleRepoMap)
+	s.handlers["repo_map"] = s.handleRepoMap
+
+	// Tool 6: find_symbol
+	findSymbolTool := mcp.NewTool("find_symbol",
+		mcp.WithDescription("Locate definitions and references of a code symbol across the repository. (Read-only)"),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Symbol name to locate")),
+		mcp.WithNumber("limit", mcp.Description("Maximum references to return (default: 20)")),
+		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
+	)
+	s.mcpServer.AddTool(findSymbolTool, s.handleFindSymbol)
+	s.handlers["find_symbol"] = s.handleFindSymbol
+
+	// Tool 7: search_code
+	searchCodeTool := mcp.NewTool("search_code",
+		mcp.WithDescription("Perform regex or text search across repository source code. (Read-only)"),
+		mcp.WithString("pattern", mcp.Required(), mcp.Description("Regular expression or text search pattern")),
+		mcp.WithNumber("limit", mcp.Description("Maximum matches to return (default: 30)")),
+		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
+	)
+	s.mcpServer.AddTool(searchCodeTool, s.handleSearchCode)
+	s.handlers["search_code"] = s.handleSearchCode
+
+	// Tool 8: project_commands
+	projectCmdsTool := mcp.NewTool("project_commands",
+		mcp.WithDescription("Detect project build, test, lint, and run commands as structured data. (Read-only)"),
+		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
+	)
+	s.mcpServer.AddTool(projectCmdsTool, s.handleProjectCommands)
+	s.handlers["project_commands"] = s.handleProjectCommands
+}
+
+func (s *Server) registerResources() {
+	if s.rootDir == "" {
+		return
+	}
+
+	meta, err := codeintel.DetectProject(s.rootDir)
+	if err != nil || meta == nil {
+		return
+	}
+
+	for _, inst := range meta.Instructions {
+		uri := "file:///" + filepath.ToSlash(inst.Path)
+		res := mcp.NewResource(
+			uri,
+			inst.Name,
+			mcp.WithResourceDescription("Project instruction contract: "+inst.Name),
+			mcp.WithMIMEType("text/markdown"),
+		)
+		content := inst.Content
+		s.mcpServer.AddResource(res, func(ctx context.Context, req mcp.ReadResourceRequest) ([]interface{}, error) {
+			return []interface{}{
+				mcp.TextResourceContents{
+					ResourceContents: mcp.ResourceContents{
+						URI:      uri,
+						MIMEType: "text/markdown",
+					},
+					Text: content,
+				},
+			}, nil
+		})
+	}
 }
 
 func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -182,7 +267,7 @@ func (s *Server) handleListSkills(ctx context.Context, request mcp.CallToolReque
 	}
 
 	if len(list) == 0 {
-		return mcp.NewToolResultText("No skills installed. Add skills to .agents/skills/ or ~/.lokal/skills/."), nil
+		return mcp.NewToolResultText("No skills found. Add skills to .agents/skills/ or ~/.lokal/skills/."), nil
 	}
 
 	var sb strings.Builder
@@ -277,4 +362,185 @@ func (s *Server) handleListModels(ctx context.Context, request mcp.CallToolReque
 	}
 
 	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func (s *Server) handleRepoMap(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	targetDir := s.resolvePath(request.Params.Arguments["path"])
+
+	tokens := 2048
+	if tVal, ok := request.Params.Arguments["tokens"]; ok {
+		switch v := tVal.(type) {
+		case float64:
+			if int(v) > 0 {
+				tokens = int(v)
+			}
+		case int:
+			if v > 0 {
+				tokens = v
+			}
+		}
+	}
+
+	rm, err := codeintel.BuildRepoMap(targetDir, tokens)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("build repository map failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(rm.Formatted), nil
+}
+
+func (s *Server) handleFindSymbol(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	targetDir := s.resolvePath(request.Params.Arguments["path"])
+
+	nameVal, ok := request.Params.Arguments["name"]
+	if !ok {
+		return mcp.NewToolResultError("missing required parameter 'name'"), nil
+	}
+	name, ok := nameVal.(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return mcp.NewToolResultError("parameter 'name' must be a non-empty string"), nil
+	}
+
+	limit := 20
+	if limVal, ok := request.Params.Arguments["limit"]; ok {
+		switch v := limVal.(type) {
+		case float64:
+			if int(v) > 0 {
+				limit = int(v)
+			}
+		case int:
+			if v > 0 {
+				limit = v
+			}
+		}
+	}
+
+	res, err := codeintel.FindSymbol(targetDir, strings.TrimSpace(name), limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("find symbol %q failed: %v", name, err)), nil
+	}
+
+	if len(res.Definitions) == 0 && len(res.References) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No definitions or references found for symbol %q.", name)), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Symbol Results: %s\n\n", name))
+
+	if len(res.Definitions) > 0 {
+		sb.WriteString("## Definitions:\n")
+		for _, d := range res.Definitions {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s) at `[File: %s:%d-%d]`\n", d.Name, d.Kind, d.Path, d.Line, d.EndLine))
+			if d.Signature != "" {
+				sb.WriteString(fmt.Sprintf("  `%s`\n", d.Signature))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(res.References) > 0 {
+		sb.WriteString(fmt.Sprintf("## References (%d):\n", len(res.References)))
+		for _, ref := range res.References {
+			sb.WriteString(fmt.Sprintf("- [File: %s:%d]: `%s`\n", ref.Path, ref.Line, ref.Content))
+		}
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func (s *Server) handleSearchCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	targetDir := s.resolvePath(request.Params.Arguments["path"])
+
+	patVal, ok := request.Params.Arguments["pattern"]
+	if !ok {
+		return mcp.NewToolResultError("missing required parameter 'pattern'"), nil
+	}
+	pattern, ok := patVal.(string)
+	if !ok || strings.TrimSpace(pattern) == "" {
+		return mcp.NewToolResultError("parameter 'pattern' must be a non-empty string"), nil
+	}
+
+	limit := 30
+	if limVal, ok := request.Params.Arguments["limit"]; ok {
+		switch v := limVal.(type) {
+		case float64:
+			if int(v) > 0 {
+				limit = int(v)
+			}
+		case int:
+			if v > 0 {
+				limit = v
+			}
+		}
+	}
+
+	matches, err := codeintel.SearchCode(targetDir, pattern, limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("search code failed: %v", err)), nil
+	}
+
+	if len(matches) == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No code matches found for pattern %q.", pattern)), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d code match(es) for pattern %q:\n\n", len(matches), pattern))
+	for _, m := range matches {
+		sb.WriteString(fmt.Sprintf("- [File: %s:%d]: `%s`\n", m.Path, m.Line, m.Snippet))
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func (s *Server) handleProjectCommands(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	targetDir := s.resolvePath(request.Params.Arguments["path"])
+
+	meta, err := codeintel.DetectProject(targetDir)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("detect project failed: %v", err)), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Project Commands & Guidance: %s\n\n", filepath.Base(targetDir)))
+
+	if len(meta.Instructions) > 0 {
+		sb.WriteString("## Instruction Files:\n")
+		for _, inst := range meta.Instructions {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s)\n", inst.Name, inst.Path))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("## Detected Commands:\n")
+	if len(meta.Commands.Build) > 0 {
+		sb.WriteString(fmt.Sprintf("- **Build**: `%s`\n", strings.Join(meta.Commands.Build, "`, `")))
+	}
+	if len(meta.Commands.Test) > 0 {
+		sb.WriteString(fmt.Sprintf("- **Test**: `%s`\n", strings.Join(meta.Commands.Test, "`, `")))
+	}
+	if len(meta.Commands.Lint) > 0 {
+		sb.WriteString(fmt.Sprintf("- **Lint**: `%s`\n", strings.Join(meta.Commands.Lint, "`, `")))
+	}
+	if len(meta.Commands.Run) > 0 {
+		sb.WriteString(fmt.Sprintf("- **Run**: `%s`\n", strings.Join(meta.Commands.Run, "`, `")))
+	}
+
+	if len(meta.Commands.Build) == 0 && len(meta.Commands.Test) == 0 && len(meta.Commands.Lint) == 0 {
+		sb.WriteString("No standard build or test configuration files detected.\n")
+	}
+
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+func (s *Server) resolvePath(pathArg interface{}) string {
+	if pathArg != nil {
+		if pStr, ok := pathArg.(string); ok && strings.TrimSpace(pStr) != "" {
+			return filepath.Clean(strings.TrimSpace(pStr))
+		}
+	}
+	if s.rootDir != "" {
+		return s.rootDir
+	}
+	cwd, _ := os.Getwd()
+	return cwd
 }

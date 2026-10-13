@@ -39,6 +39,8 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 	root.AddCommand(newAskCmd(defaultRagDeps()))
 	root.AddCommand(newSkillsCmd(defaultSkillsDeps()))
 	root.AddCommand(newMcpCmd(defaultMcpDeps()))
+	root.AddCommand(newRepoMapCmd())
+	root.AddCommand(newSymbolsCmd())
 	return root
 }
 
