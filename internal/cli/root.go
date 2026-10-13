@@ -4,9 +4,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/hi-donwi/Agent-Local/internal/doctor"
 	"github.com/spf13/cobra"
 )
 
@@ -27,13 +29,38 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 		SilenceErrors: true,
 	}
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newDoctorCmd(doctor.Default))
 	return root
 }
 
+// ExitCodeError ends lokal with a specific exit code after the command has
+// already printed its own output, as doctor does for warnings and failures.
+type ExitCodeError struct {
+	Code int
+}
+
+func (e *ExitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
 // Execute runs lokal with the process arguments and exits non-zero on error.
 func Execute() {
-	if err := NewRootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "lokal: %v\n", err)
-		os.Exit(1)
+	code, msg := exitStatus(NewRootCmd().Execute())
+	if msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
 	}
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// exitStatus maps a command error to the process exit code and the message to
+// print; an ExitCodeError carries its code and prints nothing more.
+func exitStatus(err error) (int, string) {
+	var exit *ExitCodeError
+	switch {
+	case err == nil:
+		return 0, ""
+	case errors.As(err, &exit):
+		return exit.Code, ""
+	}
+	return 1, "lokal: " + err.Error()
 }

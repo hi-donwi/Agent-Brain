@@ -64,9 +64,13 @@ static-check: cross
 vulncheck:
 	go run $(GOVULNCHECK) ./...
 
+# doctor exits 1 on warnings, which a CI runner may legitimately have; only a
+# failure (2) or a crash fails the smoke run.
 smoke: build
 	./bin/$(BINARY) version
 	./bin/$(BINARY) version --json
+	./bin/$(BINARY) doctor || [ $$? -eq 1 ]
+	./bin/$(BINARY) doctor --json > /dev/null || [ $$? -eq 1 ]
 
 # The same steps CI runs on every push, in the same order.
 check: fmt-check tidy-check vet race smoke
