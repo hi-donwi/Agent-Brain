@@ -1,7 +1,7 @@
 # ADR-0007: lokal includes an agent runtime, a coding agent, and multi-agent orchestration; UIs stay outside
 
 - **Date:** 2026-10-13
-- **Status:** Accepted (2026-10-13, without amendments)
+- **Status:** Superseded by [ADR-0008](0008-local-ai-platform-agent-hosts-own-the-loop.md) (accepted 2026-10-13 without amendments, superseded the same day)
 - **Deciders:** Doni Wicaksono
 
 ## Context

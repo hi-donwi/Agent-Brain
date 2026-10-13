@@ -54,4 +54,4 @@ the same machine (a browser page, a compromised package) can reach a loopback po
 ## Follow-up
 
 - [ ] M2: token file, loopback default, Host header check against DNS rebinding
-- [ ] M5: redaction before trace write, with tests that refuse a planted fake secret
+- [ ] M6: redaction before trace write, with tests that refuse a planted fake secret

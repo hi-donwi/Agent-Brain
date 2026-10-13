@@ -42,8 +42,8 @@ Agent-Skills). A skill name resolves to the first source that has it.
 ### Negative
 - Routing quality now matters: a skill whose description does not match how users phrase
   the task is never loaded. The forge's evals measure trigger accuracy for this reason.
-- The format has no machine-readable tool or permission declarations; lokal's agent
-  policy (M5) cannot be derived from the skill alone.
+- The format has no machine-readable tool or permission declarations; an agent host's
+  tool policy cannot be derived from the skill alone.
 
 ### Neutral
 - Validation follows the spec's naming and length rules; lokal adds no stricter ones.

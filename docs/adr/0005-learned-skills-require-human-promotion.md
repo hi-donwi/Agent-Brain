@@ -61,5 +61,5 @@ instead of being compared against them.
 
 ## Follow-up
 
-- [ ] M5: traces record content origin per message so provenance is possible
+- [ ] M6: traces record content origin per message so provenance is possible
 - [ ] M7: candidate store, eval harness, promote and rollback commands
