@@ -184,7 +184,7 @@ task --> repo map + retrieval --> plan (role: plan) --> edit (role: code, edit f
   pushes; `lokal code undo` walks back.
 - Edits are validated before they touch the file; malformed edits from weak models are
   rejected and retried, not half-applied.
-- `lokal code new "<description>"` scaffolds from template skills and iterates until the
+- Vibe coding: `lokal code new "<description>"` scaffolds from template skills and iterates until the
   app builds and its tests pass; the dev server stays on loopback and is previewed through
   the tunnel.
 - External coding tools can use the same models and knowledge through `lokal serve` and
