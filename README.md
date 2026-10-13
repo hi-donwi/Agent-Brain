@@ -7,11 +7,14 @@ OpenAI-compatible endpoint, indexes your files for retrieval with citations, run
 tool-using agent with approvals, and learns reusable skills from your own work, which
 you review before they are used.
 
+It also runs agents: a code assistant that edits repositories through git checkpoints,
+and multi-agent runs where role agents split a task, all on local models.
+
 It is one static binary. It does not run models itself; it drives the engines that do
 (Ollama, llama.cpp, LM Studio, MLX-LM, vLLM). Nothing leaves your machine unless you
 configure it to.
 
-> **Status: pre-alpha (milestone M0).** Only `lokal version` exists today. The
+> **Status: pre-alpha (milestone M1).** Only `lokal version` is usable today. The
 > [roadmap](ROADMAP.md) lists what lands in which release.
 
 ## Planned commands
@@ -19,11 +22,17 @@ configure it to.
 | Command | What it will do | Milestone |
 |---|---|---|
 | `lokal setup`, `lokal doctor` | Detect hardware and backends, install and pull for a profile, verify end to end | M1 |
-| `lokal serve` | One local OpenAI-compatible endpoint with stable model aliases | M2 |
+| `lokal serve`, `lokal service` | One local OpenAI-compatible endpoint; roles over several models within memory | M2 |
 | `lokal index`, `lokal ask`, `lokal search` | Local hybrid retrieval with `path:line` citations | M3 |
 | `lokal skills`, `lokal mcp` | Agent Skills (SKILL.md) runtime; MCP server for other agents | M4 |
-| `lokal run` | Small local agent with tool approvals and traces | M5 |
-| `lokal forge` | Draft, evaluate, and harden skill candidates from your traces | M6 |
+| `lokal run`, `lokal sessions` | Agent loop with approvals, context engine, resumable sessions, memory | M5 |
+| `lokal code`, `lokal code new` | Coding agent and vibe coding: validated edits, git checkpoints, test loop | M6 |
+| `lokal forge` | Learn, evaluate, and harden skill candidates from your traces | M7 |
+| `lokal agents` | Multi-agent runs: a lead with role workers, scheduled within memory | M8 |
+
+Every interactive command also runs headless with a JSON event stream, so Agent-Control,
+scripts, and CI can drive it. Coding tools that speak the OpenAI API or MCP can use
+lokal's models, knowledge, and skills directly.
 
 ## Build from source
 
