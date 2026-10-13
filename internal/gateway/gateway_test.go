@@ -15,6 +15,7 @@ import (
 	"github.com/hi-donwi/Agent-Local/internal/backend"
 	"github.com/hi-donwi/Agent-Local/internal/gateway"
 	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Local/internal/residency"
 )
 
 type mockGatewayAdapter struct {
@@ -685,5 +686,45 @@ func TestResolveModel_Fallbacks(t *testing.T) {
 		if fb == "qwen2.5-coder:1.5b" {
 			t.Errorf("primary model should not be in its own fallback list")
 		}
+	}
+}
+
+func TestServer_Residency_MemoryExceeded(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{}
+	resMgr := residency.New(residency.Config{
+		TotalBudget: 1 * 1024 * 1024 * 1024, // 1 GiB budget
+	})
+
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:      "127.0.0.1:0",
+		Token:     token,
+		Adapter:   adapter,
+		Residency: resMgr,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	body := map[string]interface{}{
+		"model": "qwen2.5-coder:7b", // requires ~5.5 GiB
+		"messages": []map[string]string{
+			{"role": "user", "content": "hi"},
+		},
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for memory budget exceeded, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "memory_budget_exceeded") {
+		t.Errorf("expected memory_budget_exceeded code, got %s", rec.Body.String())
 	}
 }

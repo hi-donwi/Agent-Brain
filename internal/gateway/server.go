@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"github.com/hi-donwi/Agent-Local/internal/backend"
 	"github.com/hi-donwi/Agent-Local/internal/catalog"
 	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Local/internal/hw"
+	"github.com/hi-donwi/Agent-Local/internal/residency"
 )
 
 // DefaultPort is the default TCP port for lokal serve.
@@ -27,6 +30,7 @@ type ServerConfig struct {
 	Adapter      backend.Adapter
 	Catalog      *catalog.Catalog
 	UserConfig   *home.Config
+	Residency    *residency.Manager
 	Version      string
 }
 
@@ -44,6 +48,23 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	if cfg.Catalog == nil {
 		cfg.Catalog = catalog.Default()
+	}
+	if cfg.Residency == nil {
+		const gib = uint64(1024 * 1024 * 1024)
+		budget := 6 * gib
+		if hwInfo, err := hw.Detect(); err == nil && hwInfo.Memory.TotalBytes > 0 {
+			budget = (hwInfo.Memory.TotalBytes * 7) / 10
+			if budget < 4*gib {
+				budget = 4 * gib
+			}
+		}
+		cfg.Residency = residency.New(residency.Config{
+			TotalBudget:    budget,
+			MaxConcurrency: 4,
+			QueueTimeout:   60 * time.Second,
+			Catalog:        cfg.Catalog,
+			Adapter:        cfg.Adapter,
+		})
 	}
 
 	mux := http.NewServeMux()
@@ -95,6 +116,9 @@ func (s *Server) Addr() string {
 
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.cfg.Residency != nil {
+		_ = s.cfg.Residency.Close()
+	}
 	if s.httpServer != nil {
 		return s.httpServer.Shutdown(ctx)
 	}
@@ -107,11 +131,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	if s.cfg.UserConfig != nil {
 		profile = s.cfg.UserConfig.Profile
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	data := map[string]interface{}{
 		"status":  "ok",
 		"version": s.cfg.Version,
 		"profile": profile,
-	})
+	}
+	if s.cfg.Residency != nil {
+		data["residency"] = s.cfg.Residency.Stats()
+	}
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // OpenAI Model List representations.
@@ -328,6 +356,33 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	candidateTags := append([]string{target.BackendTag}, target.Fallbacks...)
 	thinkFalse := false
+
+	// Acquire residency lease and concurrency slot
+	if s.cfg.Residency != nil {
+		release, err := s.cfg.Residency.Acquire(ctx, target.BackendTag, numCtx)
+		if err != nil {
+			if errors.Is(err, residency.ErrMemoryExceeded) {
+				writeAPIError(w, http.StatusBadRequest,
+					fmt.Sprintf("model %s exceeds available memory budget", target.BackendTag),
+					"invalid_request_error", "memory_budget_exceeded")
+				return
+			}
+			if errors.Is(err, residency.ErrQueueTimeout) {
+				writeAPIError(w, http.StatusTooManyRequests,
+					"request queue timeout: server concurrency capacity exceeded",
+					"api_error", "queue_timeout")
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			writeAPIError(w, http.StatusInternalServerError,
+				fmt.Sprintf("failed to acquire model lease: %v", err),
+				"api_error", "residency_error")
+			return
+		}
+		defer release()
+	}
 
 	// Handle SSE streaming
 	if req.Stream {
@@ -603,6 +658,32 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, s.cfg.Adapter.Name())
 	truncateFalse := false
+
+	if s.cfg.Residency != nil {
+		rel, err := s.cfg.Residency.Acquire(ctx, target.BackendTag, 0)
+		if err != nil {
+			if errors.Is(err, residency.ErrMemoryExceeded) {
+				writeAPIError(w, http.StatusBadRequest,
+					fmt.Sprintf("model %s exceeds available memory budget", target.BackendTag),
+					"invalid_request_error", "memory_budget_exceeded")
+				return
+			}
+			if errors.Is(err, residency.ErrQueueTimeout) {
+				writeAPIError(w, http.StatusTooManyRequests,
+					"request queue timeout: server concurrency capacity exceeded",
+					"api_error", "queue_timeout")
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			writeAPIError(w, http.StatusInternalServerError,
+				fmt.Sprintf("failed to acquire model lease: %v", err),
+				"api_error", "residency_error")
+			return
+		}
+		defer rel()
+	}
 
 	embedResp, err := s.cfg.Adapter.Embed(ctx, backend.EmbedRequest{
 		Model:    target.BackendTag,

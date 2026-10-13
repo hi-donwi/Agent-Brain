@@ -78,6 +78,16 @@ func (m Model) SupportsRole(r Role) bool {
 	return false
 }
 
+// MemoryAtCtx estimates memory in bytes for the model at a specific context length.
+func (m Model) MemoryAtCtx(numCtx int) uint64 {
+	if numCtx <= 0 || m.MaxContext <= 0 {
+		return m.MemoryBytes
+	}
+	// KV cache estimation: ~4KB per token heuristic
+	extra := uint64(numCtx) * 4096
+	return m.MemoryBytes + extra
+}
+
 // Profile pairs hardware capability with default model assignments per role.
 type Profile struct {
 	Name        ProfileName     `json:"name"`
