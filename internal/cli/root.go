@@ -43,6 +43,7 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 	root.AddCommand(newSymbolsCmd())
 	root.AddCommand(newTracesCmd(defaultTracesDeps()))
 	root.AddCommand(newEvalCmd(defaultEvalDeps()))
+	root.AddCommand(newForgeCmd(defaultForgeDeps()))
 	return root
 }
 

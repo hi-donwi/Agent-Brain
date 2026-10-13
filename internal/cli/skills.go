@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Local/internal/forge"
 	"github.com/hi-donwi/Agent-Local/internal/home"
 	"github.com/hi-donwi/Agent-Local/internal/skills"
 	"github.com/spf13/cobra"
@@ -47,6 +48,9 @@ according to the open Agent Skills specification (SKILL.md) and progressive disc
 	cmd.AddCommand(newSkillsShowCmd(deps))
 	cmd.AddCommand(newSkillsValidateCmd())
 	cmd.AddCommand(newSkillsAddCmd(deps))
+	cmd.AddCommand(newSkillsPromoteCmd(deps))
+	cmd.AddCommand(newSkillsRollbackCmd(deps))
+	cmd.AddCommand(newSkillsExportCmd(deps))
 
 	return cmd
 }
@@ -271,4 +275,100 @@ func resolveSkillsManager(deps SkillsDeps) (*skills.Manager, error) {
 	}
 
 	return skills.NewManager(cwd, layout.Skills, configuredDirs), nil
+}
+
+func newSkillsPromoteCmd(deps SkillsDeps) *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "promote <candidate-name>",
+		Short: "Promote an evaluated candidate skill to user skills",
+		Long: `promote verifies evaluation benchmarks, performs safety scans, versions
+by content hash, and promotes a skill from ~/.lokal/candidates/ to ~/.lokal/skills/.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			candidateName := args[0]
+			layout, err := deps.ResolveHome()
+			if err != nil {
+				return fmt.Errorf("resolve home: %w", err)
+			}
+			if err := layout.Ensure(); err != nil {
+				return fmt.Errorf("ensure home: %w", err)
+			}
+
+			promoter := forge.NewPromoter(layout.Candidates, layout.Skills)
+			res, err := promoter.Promote(candidateName, force)
+			if err != nil {
+				return fmt.Errorf("promote skill: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Successfully promoted %s (version: %s)\n", res.SkillName, res.ContentHash)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed path: %s\n", res.TargetDir)
+			if res.BackupPath != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Previous version backed up to: %s\n", res.BackupPath)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "force promotion without evaluation report check")
+	return cmd
+}
+
+func newSkillsRollbackCmd(deps SkillsDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "rollback <skill-name>",
+		Short: "Rollback a promoted skill to its previous backup version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			skillName := args[0]
+			layout, err := deps.ResolveHome()
+			if err != nil {
+				return fmt.Errorf("resolve home: %w", err)
+			}
+
+			promoter := forge.NewPromoter(layout.Candidates, layout.Skills)
+			backupPath, err := promoter.Rollback(skillName)
+			if err != nil {
+				return fmt.Errorf("rollback skill: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Successfully rolled back %s from backup %s\n", skillName, backupPath)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newSkillsExportCmd(deps SkillsDeps) *cobra.Command {
+	var outDir string
+
+	cmd := &cobra.Command{
+		Use:   "export <skill-name>",
+		Short: "Export a skill formatted for Agent-Skills repository",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			skillName := args[0]
+			layout, err := deps.ResolveHome()
+			if err != nil {
+				return fmt.Errorf("resolve home: %w", err)
+			}
+
+			if outDir == "" {
+				outDir = "./exported-skills"
+			}
+
+			promoter := forge.NewPromoter(layout.Candidates, layout.Skills)
+			destPath, err := promoter.Export(skillName, outDir)
+			if err != nil {
+				return fmt.Errorf("export skill: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Successfully exported skill %s to %s\n", skillName, destPath)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outDir, "out", "", "destination directory (defaults to ./exported-skills)")
+	return cmd
 }
