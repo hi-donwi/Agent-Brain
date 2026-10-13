@@ -182,6 +182,18 @@ func TestMiddleware_Auth_and_Host(t *testing.T) {
 	if recEvilHost.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for evil host header, got %d", recEvilHost.Code)
 	}
+
+	// 5. Wildcard allowed hosts allows external hosts
+	wildcardHandler := gateway.HostValidationMiddleware([]string{"*"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	reqWildcard := httptest.NewRequest("GET", "/healthz", nil)
+	reqWildcard.Host = "52.77.217.37:52140"
+	recWildcard := httptest.NewRecorder()
+	wildcardHandler.ServeHTTP(recWildcard, reqWildcard)
+	if recWildcard.Code != http.StatusOK {
+		t.Errorf("expected 200 for wildcard host, got %d", recWildcard.Code)
+	}
 }
 
 func TestServer_ChatCompletions(t *testing.T) {

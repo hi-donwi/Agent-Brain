@@ -98,9 +98,11 @@ to ~/.lokal/serve.token with mode 0600.`,
 			}
 
 			bindHost := "127.0.0.1"
+			var allowedHosts []string
 			if allowRemote {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: binding to 0.0.0.0 exposes the gateway to your local network. Ensure firewall rules and token protection are active.")
 				bindHost = "0.0.0.0"
+				allowedHosts = []string{"*"}
 			}
 			addr := fmt.Sprintf("%s:%d", bindHost, port)
 
@@ -112,7 +114,7 @@ to ~/.lokal/serve.token with mode 0600.`,
 			srv, err := gateway.NewServer(gateway.ServerConfig{
 				Addr:         addr,
 				Token:        token,
-				AllowedHosts: []string{},
+				AllowedHosts: allowedHosts,
 				Adapter:      adapter,
 				Catalog:      deps.Catalog,
 				UserConfig:   cfg,

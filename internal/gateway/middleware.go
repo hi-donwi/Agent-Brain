@@ -68,12 +68,21 @@ func HostValidationMiddleware(extraAllowed []string) func(http.Handler) http.Han
 		"::1":       true,
 		"[::1]":     true,
 	}
+	allowAll := false
 	for _, h := range extraAllowed {
-		allowed[strings.ToLower(strings.TrimSpace(h))] = true
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "*" {
+			allowAll = true
+		}
+		allowed[h] = true
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if allowAll {
+				next.ServeHTTP(w, r)
+				return
+			}
 			host := r.Host
 			if h, _, err := net.SplitHostPort(host); err == nil {
 				host = h
