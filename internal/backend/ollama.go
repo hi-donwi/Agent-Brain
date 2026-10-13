@@ -455,3 +455,38 @@ func (o *OllamaAdapter) Unload(ctx context.Context, model string) error {
 	}
 	return nil
 }
+
+// Delete removes a model from the local backend store.
+func (o *OllamaAdapter) Delete(ctx context.Context, model string) error {
+	if model == "" {
+		return errors.New("model name cannot be empty")
+	}
+	payload := map[string]interface{}{
+		"model": model,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode delete request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, o.endpoint+"/api/delete", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("delete model %s: %w", model, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("model %s not found", model)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete returned status %d: %s", resp.StatusCode, string(respBytes))
+	}
+	return nil
+}

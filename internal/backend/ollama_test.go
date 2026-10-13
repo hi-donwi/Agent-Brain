@@ -348,3 +348,53 @@ func TestOllama_Unload(t *testing.T) {
 		t.Errorf("expected keep_alive 0, got %v", requestedKeepAlive)
 	}
 }
+
+func TestOllama_Delete(t *testing.T) {
+	var requestedMethod string
+	var requestedPath string
+	var requestedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedMethod = r.Method
+		requestedPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&requestedBody)
+
+		if requestedPath != "/api/delete" {
+			http.NotFound(w, r)
+			return
+		}
+		if requestedBody["model"] == "missing:model" {
+			http.Error(w, `{"error": "model 'missing:model' not found"}`, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	adapter := backend.NewOllama(server.URL, server.Client())
+	ctx := context.Background()
+
+	// Empty model name check
+	if err := adapter.Delete(ctx, ""); err == nil {
+		t.Error("expected error deleting empty model name")
+	}
+
+	// Successful delete
+	if err := adapter.Delete(ctx, "qwen3:0.6b"); err != nil {
+		t.Fatalf("Delete() failed: %v", err)
+	}
+	if requestedMethod != http.MethodDelete {
+		t.Errorf("expected DELETE method, got %s", requestedMethod)
+	}
+	if requestedPath != "/api/delete" {
+		t.Errorf("expected /api/delete path, got %s", requestedPath)
+	}
+	if requestedBody["model"] != "qwen3:0.6b" {
+		t.Errorf("expected model qwen3:0.6b, got %v", requestedBody["model"])
+	}
+
+	// 404 Not Found delete
+	if err := adapter.Delete(ctx, "missing:model"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not found error, got %v", err)
+	}
+}

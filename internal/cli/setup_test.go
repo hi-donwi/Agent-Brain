@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Local/internal/doctor"
 	"github.com/hi-donwi/Agent-Local/internal/home"
 	"github.com/hi-donwi/Agent-Local/internal/hw"
 	"github.com/hi-donwi/Agent-Local/internal/setup"
@@ -130,5 +133,138 @@ func TestSetupCmd_ProfileOverride(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "Hardware profile: standard") {
 		t.Errorf("expected standard profile in output, got:\n%s", out)
+	}
+}
+
+func TestSetupCmd_Yes_Success(t *testing.T) {
+	tempHome := t.TempDir()
+	adapter := &mockCLIAdapter{}
+	doctorRan := false
+
+	deps := SetupDeps{
+		DetectHW: func() (hw.Info, error) {
+			return hw.Info{
+				OS:          "darwin",
+				Arch:        "arm64",
+				Accelerator: hw.AcceleratorMetal,
+				Memory:      hw.Memory{TotalBytes: 8 * gib},
+			}, nil
+		},
+		ResolveHome: func() (home.Layout, error) {
+			return home.Resolve(func(string) string { return tempHome }, nil)
+		},
+		FreeBytes: func(string) (uint64, error) {
+			return 50 * gib, nil
+		},
+		CheckBackend: func(context.Context) (bool, []string, error) {
+			return true, nil, nil
+		},
+		ResolveAdapter: func() (backend.Adapter, error) {
+			return adapter, nil
+		},
+		RunDoctor: func(context.Context) (doctor.Report, error) {
+			doctorRan = true
+			return doctor.Report{
+				Checks: []doctor.Result{
+					{ID: "backend", Title: "backend", Severity: doctor.OK, Message: "ollama running"},
+				},
+				Summary: doctor.Summary{OK: 1},
+			}, nil
+		},
+	}
+
+	cmd := newSetupCmd(deps)
+	var outBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"--yes"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	// Verify model was pulled
+	if len(adapter.pulled) == 0 {
+		t.Error("expected models to be pulled, got 0")
+	}
+
+	// Verify config.yaml was written
+	cfg, err := home.LoadConfig(tempHome + "/config.yaml")
+	if err != nil {
+		t.Fatalf("failed to load generated config: %v", err)
+	}
+	if cfg.Profile != "tiny" {
+		t.Errorf("expected profile tiny, got %s", cfg.Profile)
+	}
+
+	// Verify doctor ran
+	if !doctorRan {
+		t.Error("expected doctor to run after setup")
+	}
+
+	if !strings.Contains(outBuf.String(), "Setup completed successfully") {
+		t.Errorf("expected completion message, got: %s", outBuf.String())
+	}
+}
+
+func TestSetupCmd_Yes_BackendNotRunning(t *testing.T) {
+	deps := mockSetupDeps(20*gib, false)
+	cmd := newSetupCmd(deps)
+
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"--yes"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when backend is not running")
+	}
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) || exit.Code != 2 {
+		t.Errorf("expected exit code 2, got %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "Cannot proceed unattended") {
+		t.Errorf("expected unattended notice in stderr, got: %s", errBuf.String())
+	}
+}
+
+func TestSetupCmd_Yes_PullFailure(t *testing.T) {
+	tempHome := t.TempDir()
+	adapter := &mockCLIAdapter{pullErr: errors.New("network error")}
+
+	deps := SetupDeps{
+		DetectHW: func() (hw.Info, error) {
+			return hw.Info{
+				OS:          "darwin",
+				Arch:        "arm64",
+				Accelerator: hw.AcceleratorMetal,
+				Memory:      hw.Memory{TotalBytes: 8 * gib},
+			}, nil
+		},
+		ResolveHome: func() (home.Layout, error) {
+			return home.Resolve(func(string) string { return tempHome }, nil)
+		},
+		FreeBytes: func(string) (uint64, error) {
+			return 50 * gib, nil
+		},
+		CheckBackend: func(context.Context) (bool, []string, error) {
+			return true, nil, nil
+		},
+		ResolveAdapter: func() (backend.Adapter, error) {
+			return adapter, nil
+		},
+	}
+
+	cmd := newSetupCmd(deps)
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{"--yes"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error on pull failure")
+	}
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) || exit.Code != 2 {
+		t.Errorf("expected exit code 2, got %v", err)
 	}
 }

@@ -4,21 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/hi-donwi/Agent-Local/internal/backend"
 	"github.com/hi-donwi/Agent-Local/internal/catalog"
+	"github.com/hi-donwi/Agent-Local/internal/doctor"
 	"github.com/hi-donwi/Agent-Local/internal/home"
 	"github.com/hi-donwi/Agent-Local/internal/hw"
 	"github.com/hi-donwi/Agent-Local/internal/setup"
 	"github.com/spf13/cobra"
 )
 
-// SetupDeps supplies the environment inspection functions for setup.
+// SetupDeps supplies the environment inspection and execution functions for setup.
 type SetupDeps struct {
-	DetectHW     func() (hw.Info, error)
-	ResolveHome  func() (home.Layout, error)
-	FreeBytes    func(string) (uint64, error)
-	CheckBackend func(context.Context) (bool, []string, error)
+	DetectHW       func() (hw.Info, error)
+	ResolveHome    func() (home.Layout, error)
+	FreeBytes      func(string) (uint64, error)
+	CheckBackend   func(context.Context) (bool, []string, error)
+	ResolveAdapter func() (backend.Adapter, error)
+	RunDoctor      func(context.Context) (doctor.Report, error)
 }
 
 func defaultSetupDeps() SetupDeps {
@@ -37,6 +41,12 @@ func defaultSetupDeps() SetupDeps {
 				names[i] = m.Name
 			}
 			return true, names, nil
+		},
+		ResolveAdapter: func() (backend.Adapter, error) {
+			return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
+		},
+		RunDoctor: func(ctx context.Context) (doctor.Report, error) {
+			return doctor.Run(ctx, doctor.Default()), nil
 		},
 	}
 }
@@ -108,6 +118,95 @@ Use --dry-run to inspect the plan and disk calculations before downloading anyth
 				return &ExitCodeError{Code: 2}
 			}
 
+			if dryRun || !yes {
+				return nil
+			}
+
+			// Unattended execution (--yes)
+			if !plan.Backend.Installed {
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n[setup] Cannot proceed unattended: inference backend '%s' is not running or not installed.\n%s\n",
+					plan.Backend.Name, plan.Backend.Instruction)
+				return &ExitCodeError{Code: 2}
+			}
+
+			adapter, err := deps.ResolveAdapter()
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n[setup] Failed to initialize backend adapter: %v\n", err)
+				return &ExitCodeError{Code: 2}
+			}
+
+			for _, m := range plan.Models {
+				if m.AlreadyPresent {
+					if !asJSON {
+						fmt.Fprintf(cmd.OutOrStdout(), "\n[setup] Model %s (%s) is already installed.\n", m.BackendID, m.ModelID)
+					}
+					continue
+				}
+
+				if !asJSON {
+					fmt.Fprintf(cmd.OutOrStdout(), "\n[setup] Pulling model %s (%s)...\n", m.BackendID, doctor.HumanBytes(m.DownloadBytes))
+				}
+				lastReport := time.Now()
+				err := adapter.Pull(ctx, m.BackendID, func(p backend.Progress) {
+					if asJSON {
+						return
+					}
+					if p.Total > 0 {
+						percent := float64(p.Completed) / float64(p.Total) * 100.0
+						if time.Since(lastReport) > 250*time.Millisecond || p.Completed == p.Total {
+							fmt.Fprintf(cmd.OutOrStdout(), "\r[setup] Pulling %s: %.1f%% (%s / %s)",
+								m.BackendID, percent, doctor.HumanBytes(p.Completed), doctor.HumanBytes(p.Total))
+							lastReport = time.Now()
+						}
+					} else if p.Status != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "\r[setup] %s: %s", m.BackendID, p.Status)
+					}
+				})
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "\n[setup] Failed to pull model %s: %v\n", m.BackendID, err)
+					return &ExitCodeError{Code: 2}
+				}
+				if !asJSON {
+					fmt.Fprintf(cmd.OutOrStdout(), "\n[setup] Model %s ready.\n", m.BackendID)
+				}
+			}
+
+			if err := layout.Ensure(); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n[setup] Failed to create home directory %s: %v\n", layout.Root, err)
+				return &ExitCodeError{Code: 2}
+			}
+
+			if err := layout.SaveConfig(plan.Config); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n[setup] Failed to save config: %v\n", err)
+				return &ExitCodeError{Code: 2}
+			}
+			if !asJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n[setup] Saved configuration to %s\n", layout.Config)
+			}
+
+			if deps.RunDoctor != nil {
+				if !asJSON {
+					fmt.Fprintln(cmd.OutOrStdout(), "\n[setup] Running doctor verification...")
+				}
+				report, err := deps.RunDoctor(ctx)
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "[setup] Doctor verification failed to run: %v\n", err)
+					return &ExitCodeError{Code: 2}
+				}
+				if !asJSON {
+					if err := report.WriteText(cmd.OutOrStdout()); err != nil {
+						return err
+					}
+				}
+				code := report.ExitCode()
+				if code != 0 {
+					return &ExitCodeError{Code: code}
+				}
+			}
+
+			if !asJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nSetup completed successfully.")
+			}
 			return nil
 		},
 	}

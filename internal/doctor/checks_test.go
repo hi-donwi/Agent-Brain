@@ -209,6 +209,9 @@ func (m *mockDoctorAdapter) Embed(context.Context, backend.EmbedRequest) (*backe
 func (m *mockDoctorAdapter) Pull(context.Context, string, func(backend.Progress)) error {
 	return nil
 }
+func (m *mockDoctorAdapter) Delete(context.Context, string) error {
+	return nil
+}
 func (m *mockDoctorAdapter) Unload(context.Context, string) error {
 	return nil
 }

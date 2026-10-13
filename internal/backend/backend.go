@@ -42,6 +42,9 @@ type Adapter interface {
 	// Pull downloads a model from the registry, reporting progress callbacks.
 	Pull(ctx context.Context, model string, onProgress func(Progress)) error
 
+	// Delete removes a model from the local backend store.
+	Delete(ctx context.Context, model string) error
+
 	// Unload removes a model from memory immediately by setting keep_alive to 0.
 	Unload(ctx context.Context, model string) error
 }
