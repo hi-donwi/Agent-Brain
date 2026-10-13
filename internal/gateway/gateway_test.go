@@ -16,6 +16,7 @@ import (
 	"github.com/hi-donwi/Agent-Local/internal/gateway"
 	"github.com/hi-donwi/Agent-Local/internal/home"
 	"github.com/hi-donwi/Agent-Local/internal/residency"
+	"github.com/hi-donwi/Agent-Local/internal/trace"
 )
 
 type mockGatewayAdapter struct {
@@ -726,5 +727,109 @@ func TestServer_Residency_MemoryExceeded(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "memory_budget_exceeded") {
 		t.Errorf("expected memory_budget_exceeded code, got %s", rec.Body.String())
+	}
+}
+
+func TestServer_TraceRecording(t *testing.T) {
+	tracesDir := t.TempDir()
+	store := trace.NewStore(tracesDir)
+	token := "trace-token"
+
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{
+			Message: backend.ChatMessage{
+				Role:    "assistant",
+				Content: "Hello from trace test",
+			},
+			PromptEvalCount: 15,
+			EvalCount:       25,
+		},
+		streamFunc: func(ctx context.Context, req backend.ChatRequest, onChunk func(backend.ChatChunk) error) (*backend.ChatResponse, error) {
+			_ = onChunk(backend.ChatChunk{Content: "Streamed "})
+			_ = onChunk(backend.ChatChunk{
+				Done:            true,
+				PromptEvalCount: 12,
+				EvalCount:       18,
+			})
+			return &backend.ChatResponse{
+				PromptEvalCount: 12,
+				EvalCount:       18,
+			}, nil
+		},
+	}
+
+	userCfg := &home.Config{
+		Profile: "tiny",
+		Aliases: map[string]string{"chat": "qwen2.5-coder-1.5b"},
+	}
+
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:       "127.0.0.1:0",
+		Token:      token,
+		Adapter:    adapter,
+		UserConfig: userCfg,
+		TraceStore: store,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	handler := s.Handler()
+
+	// 1. Non-streaming completion
+	body := map[string]interface{}{
+		"model": "chat",
+		"messages": []map[string]string{
+			{"role": "user", "content": "ping non-stream"},
+		},
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(bodyBytes))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Session-Id", "trace-sess-1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("non-streaming chat failed: %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. Streaming completion
+	bodyStream := map[string]interface{}{
+		"model":  "chat",
+		"stream": true,
+		"messages": []map[string]string{
+			{"role": "user", "content": "ping stream"},
+		},
+	}
+	bodyStreamBytes, _ := json.Marshal(bodyStream)
+	reqStream := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(bodyStreamBytes))
+	reqStream.Host = "127.0.0.1"
+	reqStream.Header.Set("Authorization", "Bearer "+token)
+	reqStream.Header.Set("X-Session-Id", "trace-sess-1")
+	recStream := httptest.NewRecorder()
+
+	handler.ServeHTTP(recStream, reqStream)
+	if recStream.Code != http.StatusOK {
+		t.Fatalf("streaming chat failed: %d: %s", recStream.Code, recStream.Body.String())
+	}
+
+	// Verify trace records
+	records, err := store.ReadSession("trace-sess-1")
+	if err != nil {
+		t.Fatalf("ReadSession failed: %v", err)
+	}
+
+	if len(records) != 2 {
+		t.Fatalf("expected 2 trace records, got %d", len(records))
+	}
+
+	if records[0].Response != "Hello from trace test" || records[0].PromptTokens != 15 || records[0].EvalTokens != 25 {
+		t.Errorf("unexpected record 0: %+v", records[0])
+	}
+
+	if records[1].Response != "Streamed " || records[1].PromptTokens != 12 || records[1].EvalTokens != 18 {
+		t.Errorf("unexpected record 1: %+v", records[1])
 	}
 }

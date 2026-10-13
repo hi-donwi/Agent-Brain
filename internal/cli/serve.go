@@ -15,6 +15,7 @@ import (
 	"github.com/hi-donwi/Agent-Local/internal/catalog"
 	"github.com/hi-donwi/Agent-Local/internal/gateway"
 	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Local/internal/trace"
 	"github.com/spf13/cobra"
 )
 
@@ -44,9 +45,10 @@ func defaultServeDeps() ServeDeps {
 
 func newServeCmd(deps ServeDeps) *cobra.Command {
 	var (
-		port        int
-		profile     string
-		allowRemote bool
+		port         int
+		profile      string
+		allowRemote  bool
+		recordTraces bool
 	)
 
 	cmd := &cobra.Command{
@@ -102,6 +104,11 @@ to ~/.lokal/serve.token with mode 0600.`,
 			}
 			addr := fmt.Sprintf("%s:%d", bindHost, port)
 
+			var traceStore *trace.Store
+			if recordTraces {
+				traceStore = trace.NewStore(layout.Traces)
+			}
+
 			srv, err := gateway.NewServer(gateway.ServerConfig{
 				Addr:         addr,
 				Token:        token,
@@ -109,6 +116,7 @@ to ~/.lokal/serve.token with mode 0600.`,
 				Adapter:      adapter,
 				Catalog:      deps.Catalog,
 				UserConfig:   cfg,
+				TraceStore:   traceStore,
 				Version:      buildinfo.Version,
 			})
 			if err != nil {
@@ -119,6 +127,9 @@ to ~/.lokal/serve.token with mode 0600.`,
 			fmt.Fprintf(cmd.OutOrStdout(), "Bearer token: %s (saved in %s)\n", token, layout.Token)
 			fmt.Fprintf(cmd.OutOrStdout(), "OpenAI endpoint: http://%s/v1\n", addr)
 			fmt.Fprintf(cmd.OutOrStdout(), "Healthcheck:     http://%s/healthz\n", addr)
+			if recordTraces {
+				fmt.Fprintf(cmd.OutOrStdout(), "Traces recorded: %s\n", layout.Traces)
+			}
 
 			serverErr := make(chan error, 1)
 			go func() {
@@ -148,6 +159,7 @@ to ~/.lokal/serve.token with mode 0600.`,
 	cmd.Flags().IntVar(&port, "port", gateway.DefaultPort, "port to listen on")
 	cmd.Flags().StringVar(&profile, "profile", "", "override hardware profile (tiny, standard, workstation)")
 	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, "allow non-loopback connections (0.0.0.0)")
+	cmd.Flags().BoolVar(&recordTraces, "trace", false, "record prompt and response traces to ~/.lokal/traces/")
 
 	return cmd
 }

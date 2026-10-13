@@ -17,6 +17,7 @@ import (
 	"github.com/hi-donwi/Agent-Local/internal/home"
 	"github.com/hi-donwi/Agent-Local/internal/hw"
 	"github.com/hi-donwi/Agent-Local/internal/residency"
+	"github.com/hi-donwi/Agent-Local/internal/trace"
 )
 
 // DefaultPort is the default TCP port for lokal serve.
@@ -31,6 +32,7 @@ type ServerConfig struct {
 	Catalog      *catalog.Catalog
 	UserConfig   *home.Config
 	Residency    *residency.Manager
+	TraceStore   *trace.Store
 	Version      string
 }
 
@@ -298,6 +300,15 @@ func generateID(prefix string) string {
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	startTime := time.Now()
+	sessionID := r.Header.Get("X-Session-Id")
+	if sessionID == "" {
+		sessionID = r.Header.Get("X-Request-Id")
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
@@ -402,6 +413,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		for _, tag := range candidateTags {
 			isFirstChunk = true
+			var streamAcc strings.Builder
 			_, streamErr = s.cfg.Adapter.ChatStream(ctx, backend.ChatRequest{
 				Model:    tag,
 				Messages: backendMsgs,
@@ -419,6 +431,24 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 				if chunk.Done {
 					doneSent = true
+					if s.cfg.TraceStore != nil {
+						var msgs []trace.Message
+						for _, m := range req.Messages {
+							msgs = append(msgs, trace.Message{Role: m.Role, Content: m.Content})
+						}
+						_ = s.cfg.TraceStore.WriteRecord(&trace.Record{
+							Version:      trace.SchemaVersion,
+							SessionID:    sessionID,
+							Model:        tag,
+							Role:         target.Role,
+							Backend:      s.cfg.Adapter.Name(),
+							Messages:     msgs,
+							Response:     streamAcc.String(),
+							DurationMs:   time.Since(startTime).Milliseconds(),
+							PromptTokens: chunk.PromptEvalCount,
+							EvalTokens:   chunk.EvalCount,
+						})
+					}
 					stopReason := "stop"
 					finalChoice := chatChunkChoice{
 						Index:        0,
@@ -449,6 +479,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					flusher.Flush()
 					return nil
 				}
+				streamAcc.WriteString(chunk.Content)
 
 				role := ""
 				if isFirstChunk {
@@ -492,6 +523,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if streamErr != nil && !headersWritten {
+			if s.cfg.TraceStore != nil {
+				var msgs []trace.Message
+				for _, m := range req.Messages {
+					msgs = append(msgs, trace.Message{Role: m.Role, Content: m.Content})
+				}
+				_ = s.cfg.TraceStore.WriteRecord(&trace.Record{
+					Version:    trace.SchemaVersion,
+					SessionID:  sessionID,
+					Model:      req.Model,
+					Role:       target.Role,
+					Backend:    s.cfg.Adapter.Name(),
+					Messages:   msgs,
+					DurationMs: time.Since(startTime).Milliseconds(),
+					Error:      streamErr.Error(),
+				})
+			}
 			writeAPIError(w, http.StatusInternalServerError, fmt.Sprintf("chat stream failed on backend: %v", streamErr), "api_error", "inference_error")
 			return
 		}
@@ -525,8 +572,43 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if lastErr != nil {
+		if s.cfg.TraceStore != nil {
+			var msgs []trace.Message
+			for _, m := range req.Messages {
+				msgs = append(msgs, trace.Message{Role: m.Role, Content: m.Content})
+			}
+			_ = s.cfg.TraceStore.WriteRecord(&trace.Record{
+				Version:    trace.SchemaVersion,
+				SessionID:  sessionID,
+				Model:      req.Model,
+				Role:       target.Role,
+				Backend:    s.cfg.Adapter.Name(),
+				Messages:   msgs,
+				DurationMs: time.Since(startTime).Milliseconds(),
+				Error:      lastErr.Error(),
+			})
+		}
 		writeAPIError(w, http.StatusInternalServerError, fmt.Sprintf("chat completion failed on backend: %v", lastErr), "api_error", "inference_error")
 		return
+	}
+
+	if s.cfg.TraceStore != nil {
+		var msgs []trace.Message
+		for _, m := range req.Messages {
+			msgs = append(msgs, trace.Message{Role: m.Role, Content: m.Content})
+		}
+		_ = s.cfg.TraceStore.WriteRecord(&trace.Record{
+			Version:      trace.SchemaVersion,
+			SessionID:    sessionID,
+			Model:        chosenTag,
+			Role:         target.Role,
+			Backend:      s.cfg.Adapter.Name(),
+			Messages:     msgs,
+			Response:     resp.Message.Content,
+			DurationMs:   time.Since(startTime).Milliseconds(),
+			PromptTokens: resp.PromptEvalCount,
+			EvalTokens:   resp.EvalCount,
+		})
 	}
 
 	apiResp := chatResponse{

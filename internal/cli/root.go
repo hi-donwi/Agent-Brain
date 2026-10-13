@@ -41,6 +41,8 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 	root.AddCommand(newMcpCmd(defaultMcpDeps()))
 	root.AddCommand(newRepoMapCmd())
 	root.AddCommand(newSymbolsCmd())
+	root.AddCommand(newTracesCmd(defaultTracesDeps()))
+	root.AddCommand(newEvalCmd(defaultEvalDeps()))
 	return root
 }
 
