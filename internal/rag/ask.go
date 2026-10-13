@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Local/internal/catalog"
 	"github.com/hi-donwi/Agent-Local/internal/store"
 )
 
@@ -75,8 +76,17 @@ func (ae *AskEngine) Ask(ctx context.Context, collectionName, question, chatMode
 
 	userPrompt := fmt.Sprintf("Context excerpts:\n%s\nQuestion: %s", contextBuilder.String(), question)
 
+	modelToUse := chatModel
+	if ae.Adapter != nil {
+		if m, ok := catalog.Default().GetModel(chatModel); ok {
+			if tag, exists := m.Backends[ae.Adapter.Name()]; exists && tag != "" {
+				modelToUse = tag
+			}
+		}
+	}
+
 	chatResp, err := ae.Adapter.Chat(ctx, backend.ChatRequest{
-		Model: chatModel,
+		Model: modelToUse,
 		Messages: []backend.ChatMessage{
 			{Role: "system", Content: ragSystemPrompt},
 			{Role: "user", Content: userPrompt},

@@ -55,6 +55,18 @@ sandbox directory with time and token bounds, verifying specified assertions.`,
 			if modelOverride != "" {
 				spec.Model = modelOverride
 			}
+			if spec.Model == "" {
+				if l, err := home.Default(); err == nil {
+					if cfg, err := l.LoadConfig(); err == nil && cfg != nil {
+						if chatModel, ok := cfg.Aliases["chat"]; ok && chatModel != "" {
+							spec.Model = chatModel
+						}
+					}
+				}
+				if spec.Model == "" {
+					spec.Model = "chat"
+				}
+			}
 
 			var adapter backend.Adapter
 			if deps.ResolveAdapter != nil {

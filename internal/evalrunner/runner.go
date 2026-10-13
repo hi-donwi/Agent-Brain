@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Local/internal/catalog"
 )
 
 // AssertionResult records the outcome of a single assertion check.
@@ -113,8 +114,14 @@ func (r *Runner) Run(ctx context.Context, spec *TaskSpec) (*EvalResult, error) {
 			result.Error = fmt.Sprintf("agent command exited with code %d: %v", exitCode, cmdErr)
 		}
 	} else if spec.Prompt != "" && r.Adapter != nil {
+		targetModel := result.Model
+		if m, ok := catalog.Default().GetModel(targetModel); ok {
+			if tag, exists := m.Backends[r.Adapter.Name()]; exists && tag != "" {
+				targetModel = tag
+			}
+		}
 		chatReq := backend.ChatRequest{
-			Model: result.Model,
+			Model: targetModel,
 			Messages: []backend.ChatMessage{
 				{Role: "user", Content: spec.Prompt},
 			},
