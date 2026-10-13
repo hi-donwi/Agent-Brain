@@ -1,0 +1,74 @@
+.PHONY: build install test race vet fmt fmt-check tidy-check cross static-check vulncheck smoke check clean
+
+BINARY  := lokal
+PKG     := github.com/hi-donwi/Agent-Local
+VERSION ?= 0.0.0-dev
+COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+LDFLAGS := -s -w \
+           -X $(PKG)/internal/buildinfo.Version=$(VERSION) \
+           -X $(PKG)/internal/buildinfo.Commit=$(COMMIT) \
+           -X $(PKG)/internal/buildinfo.Date=$(DATE)
+
+# lokal ships as one static binary per platform (ADR-0001). CGO stays off so a
+# dependency that needs a C toolchain fails the build here, not on a user's machine.
+export CGO_ENABLED := 0
+
+# Pinned: govulncheck is a security gate; a floating @latest would let the scanner
+# itself change without review.
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
+
+build:
+	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/lokal
+
+install:
+	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/lokal
+
+test:
+	go test -count=1 ./...
+
+# -race needs cgo; it is the only target that turns it back on.
+race:
+	CGO_ENABLED=1 go test -race -count=1 ./...
+
+vet:
+	go vet ./...
+
+fmt:
+	gofmt -w .
+
+fmt-check:
+	@unformatted="$$(gofmt -l .)"; \
+	if [ -n "$$unformatted" ]; then echo "Not gofmt-formatted:"; echo "$$unformatted"; exit 1; fi
+
+tidy-check:
+	go mod tidy
+	git diff --exit-code -- go.mod go.sum
+
+cross:
+	@for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
+		echo "-> $$os/$$arch"; \
+		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' \
+			-o bin/$(BINARY)-$$os-$$arch$$ext ./cmd/lokal || exit 1; \
+	done
+
+static-check: cross
+	file bin/$(BINARY)-linux-amd64 | grep -q "statically linked"
+	file bin/$(BINARY)-linux-arm64 | grep -q "statically linked"
+
+vulncheck:
+	go run $(GOVULNCHECK) ./...
+
+smoke: build
+	./bin/$(BINARY) version
+	./bin/$(BINARY) version --json
+
+# The same steps CI runs on every push, in the same order.
+check: fmt-check tidy-check vet race smoke
+
+clean:
+	rm -rf bin coverage.out
