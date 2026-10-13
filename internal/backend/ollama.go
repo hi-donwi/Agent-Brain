@@ -29,7 +29,7 @@ func NewOllama(endpoint string, client *http.Client) *OllamaAdapter {
 		ep = DefaultOllamaEndpoint
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	return &OllamaAdapter{
 		endpoint: ep,
