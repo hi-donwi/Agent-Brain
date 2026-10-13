@@ -113,3 +113,33 @@ func TestExitStatus(t *testing.T) {
 		t.Errorf("plain error: got %d %q", code, msg)
 	}
 }
+
+func TestDoctorSnippets(t *testing.T) {
+	out, err := runDoctor(t, checksWith(doctor.OK), "--snippets")
+	if err != nil {
+		t.Fatalf("doctor --snippets failed: %v", err)
+	}
+	if !strings.Contains(out, "Client Configuration Snippets") {
+		t.Errorf("expected header in output:\n%s", out)
+	}
+	if !strings.Contains(out, "Agent-Control") {
+		t.Errorf("expected Agent-Control in snippets output:\n%s", out)
+	}
+
+	outJSON, err := runDoctor(t, checksWith(doctor.OK), "--json", "--snippets")
+	if err != nil {
+		t.Fatalf("doctor --json --snippets failed: %v", err)
+	}
+	var got struct {
+		Snippets []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"snippets"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &got); err != nil {
+		t.Fatalf("unmarshal json snippets failed: %v", err)
+	}
+	if len(got.Snippets) == 0 {
+		t.Errorf("expected snippets array in JSON output")
+	}
+}

@@ -33,6 +33,7 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 	root.AddCommand(newSetupCmd(defaultSetupDeps()))
 	root.AddCommand(newModelsCmd(defaultModelsDeps()))
 	root.AddCommand(newServeCmd(defaultServeDeps()))
+	root.AddCommand(newServiceCmd())
 	return root
 }
 

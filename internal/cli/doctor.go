@@ -2,8 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/hi-donwi/Agent-Local/internal/doctor"
+	"github.com/hi-donwi/Agent-Local/internal/gateway"
+	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Local/internal/snippets"
 	"github.com/spf13/cobra"
 )
 
@@ -11,6 +15,7 @@ import (
 // against fixed outcomes instead of the live host.
 func newDoctorCmd(checks func() []doctor.Check) *cobra.Command {
 	var asJSON bool
+	var showSnippets bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check this machine and lokal's setup, and say how to fix problems",
@@ -25,18 +30,44 @@ warnings, 2 when a check failed.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			report := doctor.Run(cmd.Context(), checks())
 			code := report.ExitCode()
+
+			var snips []snippets.ClientSnippet
+			if showSnippets {
+				token := ""
+				if h, err := home.Default(); err == nil {
+					token, _ = gateway.LoadOrCreateToken(h.Token)
+				}
+				params := snippets.Params{
+					Token: token,
+				}
+				snips = snippets.All(params)
+			}
+
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				err := enc.Encode(struct {
+				payload := struct {
 					doctor.Report
-					ExitCode int `json:"exit_code"`
-				}{report, code})
-				if err != nil {
+					ExitCode int                      `json:"exit_code"`
+					Snippets []snippets.ClientSnippet `json:"snippets,omitempty"`
+				}{
+					Report:   report,
+					ExitCode: code,
+					Snippets: snips,
+				}
+				if err := enc.Encode(payload); err != nil {
 					return err
 				}
-			} else if err := report.WriteText(cmd.OutOrStdout()); err != nil {
-				return err
+			} else {
+				if err := report.WriteText(cmd.OutOrStdout()); err != nil {
+					return err
+				}
+				if showSnippets && len(snips) > 0 {
+					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprintln(cmd.OutOrStdout(), "=== Client Configuration Snippets ===")
+					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprint(cmd.OutOrStdout(), snippets.FormatText(snips))
+				}
 			}
 			if code != 0 {
 				return &ExitCodeError{Code: code}
@@ -45,5 +76,6 @@ warnings, 2 when a check failed.`,
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the report as JSON")
+	cmd.Flags().BoolVar(&showSnippets, "snippets", false, "print integration snippets for client tools and SDKs")
 	return cmd
 }
