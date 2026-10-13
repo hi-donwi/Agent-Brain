@@ -217,6 +217,51 @@ func TestOllama_Chat(t *testing.T) {
 	}
 }
 
+func TestOllama_ChatStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		var req map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&req)
+		if stream, ok := req["stream"].(bool); !ok || !stream {
+			t.Errorf("expected stream: true in request, got %v", req["stream"])
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Write([]byte("{\"model\": \"qwen3:0.6b\", \"message\": {\"role\": \"assistant\", \"content\": \"hel\"}, \"done\": false}\n"))
+		w.Write([]byte("{\"model\": \"qwen3:0.6b\", \"message\": {\"role\": \"assistant\", \"content\": \"lo\"}, \"done\": false}\n"))
+		w.Write([]byte("{\"model\": \"qwen3:0.6b\", \"message\": {\"role\": \"assistant\", \"content\": \"!\"}, \"done\": true, \"eval_count\": 3, \"eval_duration\": 100000000}\n"))
+	}))
+	defer server.Close()
+
+	adapter := backend.NewOllama(server.URL, server.Client())
+	var receivedChunks []string
+	resp, err := adapter.ChatStream(context.Background(), backend.ChatRequest{
+		Model: "qwen3:0.6b",
+		Messages: []backend.ChatMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}, func(chunk backend.ChatChunk) error {
+		receivedChunks = append(receivedChunks, chunk.Content)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() failed: %v", err)
+	}
+
+	if strings.Join(receivedChunks, "") != "hello!" {
+		t.Errorf("expected chunks to combine to 'hello!', got %v", receivedChunks)
+	}
+	if resp.Message.Content != "hello!" {
+		t.Errorf("expected final message content 'hello!', got %s", resp.Message.Content)
+	}
+	if resp.EvalCount != 3 {
+		t.Errorf("expected eval_count 3, got %d", resp.EvalCount)
+	}
+}
+
 func TestOllama_Embed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/embed" {

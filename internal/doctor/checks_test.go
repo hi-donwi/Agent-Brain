@@ -203,6 +203,9 @@ func (m *mockDoctorAdapter) RunningModels(context.Context) ([]backend.ProcessInf
 func (m *mockDoctorAdapter) Chat(context.Context, backend.ChatRequest) (*backend.ChatResponse, error) {
 	return m.chatResp, m.chatErr
 }
+func (m *mockDoctorAdapter) ChatStream(ctx context.Context, req backend.ChatRequest, onChunk func(backend.ChatChunk) error) (*backend.ChatResponse, error) {
+	return m.chatResp, m.chatErr
+}
 func (m *mockDoctorAdapter) Embed(context.Context, backend.EmbedRequest) (*backend.EmbedResponse, error) {
 	return &backend.EmbedResponse{}, m.embedErr
 }

@@ -318,6 +318,144 @@ func (o *OllamaAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 	}, nil
 }
 
+// ChatStream performs streaming chat generation using Ollama's streaming /api/chat.
+func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk func(ChatChunk) error) (*ChatResponse, error) {
+	if req.Model == "" {
+		return nil, errors.New("model name cannot be empty")
+	}
+
+	payload := map[string]interface{}{
+		"model":    req.Model,
+		"messages": req.Messages,
+		"stream":   true,
+	}
+
+	options := make(map[string]interface{})
+	if req.Options != nil {
+		if req.Options.NumCtx > 0 {
+			options["num_ctx"] = req.Options.NumCtx
+		}
+		if req.Options.Temperature > 0 {
+			options["temperature"] = req.Options.Temperature
+		}
+	}
+	if len(options) > 0 {
+		payload["options"] = options
+	}
+	if req.Think != nil {
+		payload["think"] = *req.Think
+	}
+	if req.KeepAlive != "" {
+		payload["keep_alive"] = req.KeepAlive
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode chat stream request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, o.endpoint+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("chat stream request to ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chat stream returned status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var accumulatedContent strings.Builder
+	var lastRole string
+	var finalModel string
+	var totalDur, loadDur, promptDur, evalDur int64
+	var promptEval, evalCount int
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		var raw struct {
+			Model      string      `json:"model"`
+			Message    ChatMessage `json:"message"`
+			Done       bool        `json:"done"`
+			TotalDur   int64       `json:"total_duration"`
+			LoadDur    int64       `json:"load_duration"`
+			PromptEval int         `json:"prompt_eval_count"`
+			PromptDur  int64       `json:"prompt_eval_duration"`
+			EvalCount  int         `json:"eval_count"`
+			EvalDur    int64       `json:"eval_duration"`
+		}
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+
+		finalModel = raw.Model
+		if raw.Message.Role != "" {
+			lastRole = raw.Message.Role
+		}
+		accumulatedContent.WriteString(raw.Message.Content)
+
+		if onChunk != nil {
+			chunk := ChatChunk{
+				Role:            raw.Message.Role,
+				Content:         raw.Message.Content,
+				Reasoning:       raw.Message.Reasoning,
+				Done:            raw.Done,
+				PromptEvalCount: raw.PromptEval,
+				EvalCount:       raw.EvalCount,
+			}
+			if err := onChunk(chunk); err != nil {
+				return nil, err
+			}
+		}
+
+		if raw.Done {
+			totalDur = raw.TotalDur
+			loadDur = raw.LoadDur
+			promptDur = raw.PromptDur
+			evalDur = raw.EvalDur
+			promptEval = raw.PromptEval
+			evalCount = raw.EvalCount
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read chat stream from ollama: %w", err)
+	}
+
+	evalDuration := time.Duration(evalDur)
+	var tokPerSec float64
+	if evalDuration > 0 && evalCount > 0 {
+		tokPerSec = float64(evalCount) / evalDuration.Seconds()
+	}
+
+	return &ChatResponse{
+		Model: finalModel,
+		Message: ChatMessage{
+			Role:    lastRole,
+			Content: accumulatedContent.String(),
+		},
+		TotalDuration:      time.Duration(totalDur),
+		LoadDuration:       time.Duration(loadDur),
+		PromptEvalCount:    promptEval,
+		PromptEvalDuration: time.Duration(promptDur),
+		EvalCount:          evalCount,
+		EvalDuration:       evalDuration,
+		TokensPerSecond:    tokPerSec,
+	}, nil
+}
+
 // Embed generates embeddings via native /api/embed with explicit truncation control.
 func (o *OllamaAdapter) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) {
 	payload := map[string]interface{}{

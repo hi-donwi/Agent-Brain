@@ -44,6 +44,9 @@ func (m *mockCLIAdapter) RunningModels(ctx context.Context) ([]backend.ProcessIn
 func (m *mockCLIAdapter) Chat(ctx context.Context, req backend.ChatRequest) (*backend.ChatResponse, error) {
 	return nil, nil
 }
+func (m *mockCLIAdapter) ChatStream(ctx context.Context, req backend.ChatRequest, onChunk func(backend.ChatChunk) error) (*backend.ChatResponse, error) {
+	return nil, nil
+}
 func (m *mockCLIAdapter) Embed(ctx context.Context, req backend.EmbedRequest) (*backend.EmbedResponse, error) {
 	return nil, nil
 }

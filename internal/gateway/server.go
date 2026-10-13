@@ -52,6 +52,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("POST /v1/tokens", s.handleTokens)
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 
 	// Wrap with security middleware: DNS rebinding protection and Bearer token auth
@@ -213,6 +214,54 @@ type chatResponse struct {
 	Usage   completionUsage `json:"usage"`
 }
 
+// Streaming chunk representations.
+type chatChunkDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type chatChunkChoice struct {
+	Index        int            `json:"index"`
+	Delta        chatChunkDelta `json:"delta"`
+	FinishReason *string        `json:"finish_reason"`
+}
+
+type chatStreamChunk struct {
+	ID      string            `json:"id"`
+	Object  string            `json:"object"`
+	Created int64             `json:"created"`
+	Model   string            `json:"model"`
+	Choices []chatChunkChoice `json:"choices"`
+	Usage   *completionUsage  `json:"usage,omitempty"`
+}
+
+// Token counting representations.
+type tokenCountRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages,omitempty"`
+	Text     string        `json:"text,omitempty"`
+}
+
+type tokenCountResponse struct {
+	Model      string `json:"model"`
+	Role       string `json:"role,omitempty"`
+	Tokens     int    `json:"tokens"`
+	MaxContext int    `json:"max_context"`
+	Fits       bool   `json:"fits"`
+}
+
+// estimateTokens provides a token count estimate from text and messages.
+func estimateTokens(text string, msgs []chatMessage) int {
+	totalChars := len(text)
+	for _, m := range msgs {
+		totalChars += len(m.Content) + 12
+	}
+	if totalChars == 0 {
+		return 0
+	}
+	return (totalChars + 2) / 3
+}
+
 func generateID(prefix string) string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
@@ -249,12 +298,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var numCtx int
 	if target.CatalogModel != nil && target.CatalogModel.MaxContext > 0 {
 		numCtx = target.CatalogModel.MaxContext
-		// Estimate prompt characters (roughly 3.5 chars per token heuristic)
-		totalChars := 0
-		for _, m := range req.Messages {
-			totalChars += len(m.Content)
-		}
-		estimatedTokens := totalChars / 3
+		estimatedTokens := estimateTokens("", req.Messages)
 		if estimatedTokens > numCtx {
 			writeAPIError(w, http.StatusBadRequest,
 				fmt.Sprintf("context length exceeded: estimated prompt (%d tokens) exceeds model max_context (%d)", estimatedTokens, numCtx),
@@ -282,15 +326,151 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	candidateTags := append([]string{target.BackendTag}, target.Fallbacks...)
 	thinkFalse := false
-	resp, err := s.cfg.Adapter.Chat(ctx, backend.ChatRequest{
-		Model:    target.BackendTag,
-		Messages: backendMsgs,
-		Options:  chatOpts,
-		Think:    &thinkFalse,
-	})
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, fmt.Sprintf("chat completion failed on backend: %v", err), "api_error", "inference_error")
+
+	// Handle SSE streaming
+	if req.Stream {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeAPIError(w, http.StatusInternalServerError, "streaming unsupported by response writer", "api_error", "streaming_error")
+			return
+		}
+
+		streamID := generateID("chatcmpl")
+		created := time.Now().Unix()
+
+		var streamErr error
+		var headersWritten bool
+		var isFirstChunk = true
+		var doneSent bool
+
+		for _, tag := range candidateTags {
+			isFirstChunk = true
+			_, streamErr = s.cfg.Adapter.ChatStream(ctx, backend.ChatRequest{
+				Model:    tag,
+				Messages: backendMsgs,
+				Options:  chatOpts,
+				Think:    &thinkFalse,
+			}, func(chunk backend.ChatChunk) error {
+				if !headersWritten {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Cache-Control", "no-cache")
+					w.Header().Set("Connection", "keep-alive")
+					w.Header().Set("X-Accel-Buffering", "no")
+					w.WriteHeader(http.StatusOK)
+					headersWritten = true
+				}
+
+				if chunk.Done {
+					doneSent = true
+					stopReason := "stop"
+					finalChoice := chatChunkChoice{
+						Index:        0,
+						Delta:        chatChunkDelta{},
+						FinishReason: &stopReason,
+					}
+					var usage *completionUsage
+					if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {
+						usage = &completionUsage{
+							PromptTokens:     chunk.PromptEvalCount,
+							CompletionTokens: chunk.EvalCount,
+							TotalTokens:      chunk.PromptEvalCount + chunk.EvalCount,
+						}
+					}
+					finalPayload := chatStreamChunk{
+						ID:      streamID,
+						Object:  "chat.completion.chunk",
+						Created: created,
+						Model:   tag,
+						Choices: []chatChunkChoice{finalChoice},
+						Usage:   usage,
+					}
+					data, err := json.Marshal(finalPayload)
+					if err == nil {
+						_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+					}
+					_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+					flusher.Flush()
+					return nil
+				}
+
+				role := ""
+				if isFirstChunk {
+					role = "assistant"
+					isFirstChunk = false
+				}
+				delta := chatChunkDelta{
+					Role:    role,
+					Content: chunk.Content,
+				}
+				streamPayload := chatStreamChunk{
+					ID:      streamID,
+					Object:  "chat.completion.chunk",
+					Created: created,
+					Model:   tag,
+					Choices: []chatChunkChoice{
+						{
+							Index:        0,
+							Delta:        delta,
+							FinishReason: nil,
+						},
+					},
+				}
+				data, err := json.Marshal(streamPayload)
+				if err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+					return err
+				}
+				flusher.Flush()
+				return nil
+			})
+
+			if streamErr == nil || headersWritten {
+				break
+			}
+			if ctx.Err() != nil {
+				break
+			}
+		}
+
+		if streamErr != nil && !headersWritten {
+			writeAPIError(w, http.StatusInternalServerError, fmt.Sprintf("chat stream failed on backend: %v", streamErr), "api_error", "inference_error")
+			return
+		}
+
+		if headersWritten && !doneSent {
+			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		}
+		return
+	}
+
+	// Non-streaming completion with role fallbacks
+	var resp *backend.ChatResponse
+	var lastErr error
+	var chosenTag string
+
+	for _, tag := range candidateTags {
+		resp, lastErr = s.cfg.Adapter.Chat(ctx, backend.ChatRequest{
+			Model:    tag,
+			Messages: backendMsgs,
+			Options:  chatOpts,
+			Think:    &thinkFalse,
+		})
+		if lastErr == nil {
+			chosenTag = tag
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	if lastErr != nil {
+		writeAPIError(w, http.StatusInternalServerError, fmt.Sprintf("chat completion failed on backend: %v", lastErr), "api_error", "inference_error")
 		return
 	}
 
@@ -298,7 +478,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		ID:      generateID("chatcmpl"),
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:   target.BackendTag,
+		Model:   chosenTag,
 		Choices: []chatChoice{
 			{
 				Index: 0,
@@ -318,6 +498,50 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apiResp)
+}
+
+func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
+	var req tokenCountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
+		return
+	}
+
+	if strings.TrimSpace(req.Model) == "" {
+		writeAPIError(w, http.StatusBadRequest, "model field is required", "invalid_request_error", "bad_request")
+		return
+	}
+
+	if len(req.Messages) == 0 && strings.TrimSpace(req.Text) == "" {
+		writeAPIError(w, http.StatusBadRequest, "either messages or text must be provided", "invalid_request_error", "bad_request")
+		return
+	}
+
+	backendName := ""
+	if s.cfg.Adapter != nil {
+		backendName = s.cfg.Adapter.Name()
+	}
+	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, backendName)
+
+	tokens := estimateTokens(req.Text, req.Messages)
+	maxCtx := 0
+	if target.CatalogModel != nil && target.CatalogModel.MaxContext > 0 {
+		maxCtx = target.CatalogModel.MaxContext
+	}
+
+	fits := true
+	if maxCtx > 0 && tokens > maxCtx {
+		fits = false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(tokenCountResponse{
+		Model:      target.BackendTag,
+		Role:       target.Role,
+		Tokens:     tokens,
+		MaxContext: maxCtx,
+		Fits:       fits,
+	})
 }
 
 // Embeddings request and response representations.

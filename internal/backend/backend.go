@@ -36,6 +36,9 @@ type Adapter interface {
 	// Chat performs a single chat completion with explicit context budgeting.
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 
+	// ChatStream performs a streaming chat completion, yielding tokens as they generate.
+	ChatStream(ctx context.Context, req ChatRequest, onChunk func(ChatChunk) error) (*ChatResponse, error)
+
 	// Embed generates vector embeddings with explicit truncation control.
 	Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error)
 
@@ -86,6 +89,16 @@ type ChatMessage struct {
 	Role      string `json:"role"`
 	Content   string `json:"content"`
 	Reasoning string `json:"reasoning,omitempty"`
+}
+
+// ChatChunk is one incremental delta token received during streaming generation.
+type ChatChunk struct {
+	Role            string `json:"role,omitempty"`
+	Content         string `json:"content"`
+	Reasoning       string `json:"reasoning,omitempty"`
+	Done            bool   `json:"done"`
+	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
+	EvalCount       int    `json:"eval_count,omitempty"`
 }
 
 // ChatOptions sets runtime inference parameters.
