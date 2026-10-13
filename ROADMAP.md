@@ -120,9 +120,10 @@ against recorded Ollama responses (the M0 spike cases); setup planner as a pure 
 from (hardware, installed state, catalog) to plan.
 
 Exit criteria: on a clean headless Linux VM without GPU, `lokal setup --yes` run over
-SSH followed by `lokal doctor` is green; the same on an 8 GB Apple Silicon machine;
-doctor output for "backend not running", "model missing", and "disk too full" is
-actionable.
+SSH followed by `lokal doctor` is green; macOS is covered by CI (unit tests and live
+hardware detection), with a full Apple Silicon setup run once a test machine is
+available; doctor output for "backend not running", "model missing", and "disk too full"
+is actionable.
 
 ## M2: Gateway and multi-model
 
@@ -144,6 +145,9 @@ Deliverables:
   failing.
 - Concurrency limits per backend and model, queue timeouts, and cancellation that
   propagates to the backend.
+- Another lokal gateway as a backend: lokal on a workstation, running only `lokal mcp`
+  and `lokal index` next to the files, uses the gateway on the VM for embeddings and
+  model calls through the tunnel, with no models on the workstation.
 - An optional remote or cloud backend only as an explicit opt-in (ADR-0006): labelled in
   every response and trace, never used as a silent fallback.
 - Token counting endpoint for a model or role, so agent hosts can budget their own

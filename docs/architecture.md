@@ -173,7 +173,8 @@ Agent-Control reaches a lokal gateway on a VM through an SSH tunnel, so the endp
 loopback URL and counts as `local` under its egress rules; an overlay or LAN address would
 count as `remote` and need a per-project allowlist entry. A split deployment also works:
 `lokal mcp` and `lokal index` on the workstation where the files are, `lokal serve` on the
-VM where the models are.
+VM where the models are. The workstation's lokal then has no models of its own: its
+backend is the VM's gateway, reached through the same tunnel.
 
 ## Learning path (skill forge)
 
