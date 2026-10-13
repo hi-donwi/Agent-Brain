@@ -1,7 +1,7 @@
 # ADR-0007: lokal includes an agent runtime, a coding agent, and multi-agent orchestration; UIs stay outside
 
 - **Date:** 2026-10-13
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-13, without amendments)
 - **Deciders:** Doni Wicaksono
 
 ## Context
@@ -77,7 +77,7 @@ it helps (coding task set, single-agent versus multi-agent on the same models).
 
 ## Follow-up
 
-- [ ] Owner accepts or amends this ADR
+- [x] Accepted by the maintainer on 2026-10-13, without amendments
 - [ ] M5: context engine and session design notes before code
 - [ ] M6: edit-format and sandboxing decisions recorded as ADRs at milestone start
 - [ ] M8: agent definition schema recorded as an ADR at milestone start
