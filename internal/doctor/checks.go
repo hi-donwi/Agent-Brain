@@ -344,10 +344,16 @@ func SmokeCheck(resolveConfig func() (*home.Config, error), resolveAdapter func(
 		if chatModel == "" {
 			return Outcome{Severity: Warn, Message: "smoke test skipped: no chat alias configured"}
 		}
+		backendChatModel := chatModel
+		if m, ok := catalog.Default().GetModel(chatModel); ok {
+			if bID := m.Backends[ad.Name()]; bID != "" {
+				backendChatModel = bID
+			}
+		}
 
 		thinkFalse := false
 		chatResp, err := ad.Chat(ctx, backend.ChatRequest{
-			Model: chatModel,
+			Model: backendChatModel,
 			Messages: []backend.ChatMessage{
 				{Role: "user", Content: "ping"},
 			},
@@ -364,9 +370,15 @@ func SmokeCheck(resolveConfig func() (*home.Config, error), resolveAdapter func(
 
 		embedModel := cfg.Aliases["embed"]
 		if embedModel != "" {
+			backendEmbedModel := embedModel
+			if m, ok := catalog.Default().GetModel(embedModel); ok {
+				if bID := m.Backends[ad.Name()]; bID != "" {
+					backendEmbedModel = bID
+				}
+			}
 			truncateFalse := false
 			_, err := ad.Embed(ctx, backend.EmbedRequest{
-				Model:    embedModel,
+				Model:    backendEmbedModel,
 				Input:    []string{"test"},
 				Truncate: &truncateFalse,
 			})
