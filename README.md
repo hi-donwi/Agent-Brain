@@ -3,12 +3,14 @@
 **lokal** sets up and runs AI on hardware you control, a workstation or a dedicated
 headless VM that your other machines reach through a tunnel: it picks and installs a local
 inference backend and models that fit your hardware, serves them behind one
-OpenAI-compatible endpoint, indexes your files for retrieval with citations, runs a small
-tool-using agent with approvals, and learns reusable skills from your own work, which
-you review before they are used.
+OpenAI-compatible endpoint, indexes your files and code for retrieval with citations,
+serves that knowledge and your skills to agents over MCP, and learns reusable skills from
+how your agents work, which you review before they are used.
 
-It also runs agents: a code assistant that edits repositories through git checkpoints,
-and multi-agent runs where role agents split a task, all on local models.
+lokal is the local layer under your agents, not another agent. Agent-Control, Claude
+Code, opencode, Aider, Continue, Cline, and similar tools run the loop, edit code, and
+coordinate sub-agents; lokal makes local models, knowledge, and skills good enough for
+them, and never writes to your repositories itself.
 
 It is one static binary. It does not run models itself; it drives the engines that do
 (Ollama, llama.cpp, LM Studio, MLX-LM, vLLM). Nothing leaves your machine unless you
@@ -25,14 +27,13 @@ configure it to.
 | `lokal serve`, `lokal service` | One local OpenAI-compatible endpoint; roles over several models within memory | M2 |
 | `lokal index`, `lokal ask`, `lokal search` | Local hybrid retrieval with `path:line` citations | M3 |
 | `lokal skills`, `lokal mcp` | Agent Skills (SKILL.md) runtime; MCP server for other agents | M4 |
-| `lokal run`, `lokal sessions` | Agent loop with approvals, context engine, resumable sessions, memory | M5 |
-| `lokal code`, `lokal code new` | Coding agent and vibe coding: validated edits, git checkpoints, test loop | M6 |
+| `lokal mcp` code tools | Repo map, symbol and code search, project commands and instructions (read-only) | M5 |
+| `lokal traces`, `lokal eval` | Capture and import agent traces; measure models and skills on this hardware | M6 |
 | `lokal forge` | Learn, evaluate, and harden skill candidates from your traces | M7 |
-| `lokal agents` | Multi-agent runs: a lead with role workers, scheduled within memory | M8 |
 
-Every interactive command also runs headless with a JSON event stream, so Agent-Control,
-scripts, and CI can drive it. Coding tools that speak the OpenAI API or MCP can use
-lokal's models, knowledge, and skills directly.
+Code assistance, vibe coding, and multi-agent work come from your agent host using these
+pieces: point it at `lokal serve` for models and at `lokal mcp` for knowledge and skills.
+See [ADR-0008](docs/adr/0008-local-ai-platform-agent-hosts-own-the-loop.md).
 
 ## Build from source
 
@@ -57,14 +58,16 @@ make build
 - [Architecture](docs/architecture.md): components, lokal home layout, request,
   retrieval, skill, and learning paths, security model, hardware profiles.
 - [Architecture decisions](docs/adr/README.md): why Go, why orchestrate backends, why
-  SQLite, the skill format, the human promotion gate, and local-only defaults.
+  SQLite, the skill format, the human promotion gate, local-only defaults, and why the
+  agent loop stays in agent hosts.
 
 ## Related projects
 
 - [Agent-Skills](https://github.com/hi-donwi/Agent-Skills): portable skills in the same
   SKILL.md format lokal loads and exports.
-- [Agent-Control](https://github.com/hi-donwi/Agent-Control): web control panel that can
-  use `lokal serve` as a provider.
+- [Agent-Control](https://github.com/hi-donwi/Agent-Control): agent host and web console
+  for Agent-Workspace; uses `lokal serve` for local models and `lokal mcp` for knowledge
+  and skills.
 - [Agent-Secure](https://github.com/hi-donwi/Agent-Secure): the secret and dependency
   gate this repository's CI runs.
 
