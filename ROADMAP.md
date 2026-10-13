@@ -1,6 +1,6 @@
 # Roadmap
 
-Agent-Local is built in ten milestones. Each one ships something usable on its own and
+Agent-Local is built in nine milestones. Each one ships something usable on its own and
 ends with explicit exit criteria. Milestones are sequential; work inside a milestone is
 split into small commits, one concern each, with tests first for logic.
 
@@ -14,24 +14,31 @@ layout, and Linux hardware detection.
 | [M2](#m2-gateway-and-multi-model) | v0.2 | Gateway, more backends, multi-model | Planned |
 | [M3](#m3-local-retrieval) | v0.3 | Local retrieval (RAG) | Planned |
 | [M4](#m4-skills-runtime-and-mcp-server) | v0.4 | Skills runtime and MCP server | Planned |
-| [M5](#m5-agent-runtime-and-context-engine) | v0.5 | Agent runtime and context engine | Planned |
-| [M6](#m6-coding-agent-and-vibe-coding) | v0.6 | Coding agent and vibe coding | Planned |
+| [M5](#m5-code-knowledge-over-mcp) | v0.5 | Code knowledge over MCP | Planned |
+| [M6](#m6-traces-and-eval-runner) | v0.6 | Traces and eval runner | Planned |
 | [M7](#m7-skill-forge) | v0.7 | Skill forge (auto skills) | Planned |
-| [M8](#m8-multi-agent) | v0.8 | Multi-agent | Planned |
-| [M9](#m9-v10) | v1.0 | Distribution and stability | Planned |
+| [M8](#m8-v10) | v1.0 | Distribution and stability | Planned |
+
+lokal is the local AI platform that agents use (ADR-0008). The agent loop itself, with
+code assistance, vibe coding, and multi-agent work, belongs to agent hosts: Agent-Control
+for Agent-Workspace users, and existing agents such as opencode, Aider, Continue, Cline,
+or Claude Code-compatible tools for everyone else.
 
 Where each capability lives:
 
-| Capability | Milestones |
-|---|---|
-| Setup, doctor, hardware profiles | M1 |
-| Multi-model: roles, routing, fallbacks, memory residency | M2, used by M5 and M8 |
-| RAG over files and code | M3, code-aware in M6 |
-| Skills (Agent Skills format) and MCP | M4 |
-| Agent loop, context engine, sessions, memory | M5 |
-| Code assistant and vibe coding | M6 |
-| Auto skills: learn, evaluate, harden, promote | M7 |
-| Multi-agent orchestration | M8 |
+| Capability | In lokal | In the agent host |
+|---|---|---|
+| Setup, doctor, hardware profiles | M1 | - |
+| Multi-model: roles, fallbacks, memory residency, queueing | M2 | Chooses roles per step |
+| Context budgets | M2 token guard and token counting | Context assembly and compaction |
+| RAG over files | M3 | Calls it over MCP |
+| Skills (Agent Skills format) | M4 runtime, router, MCP | Loads and follows them |
+| Code knowledge: repo map, symbols, project instructions | M5, read-only over MCP | Uses it while coding |
+| Agent loop, tools, approvals, sessions | - | Agent-Control or an external agent |
+| Code assistant and vibe coding (edits, git, test loop) | M6 measures models for it | Agent-Control or an external agent |
+| Multi-agent orchestration | M2 keeps concurrent agents within memory | Agent-Control or an external agent |
+| Traces and evaluation | M6 | Exports session logs |
+| Auto skills: learn, evaluate, harden, promote | M7 | Uses promoted skills |
 
 ## Principles
 
@@ -45,11 +52,12 @@ Where each capability lives:
 - **Laptop or headless server, same tool.** lokal runs the same on a desktop and on a
   dedicated headless Linux VM that other machines reach through a tunnel. Nothing
   assumes a GUI, a browser, or an interactive terminal.
-- **Small models first.** Every agent feature is designed for short context windows
-  and weaker tool use (narrow tool sets, explicit budgets, structured edits) and measured
-  on the target profile, including a CPU-only VM.
-- **Reversible by default.** File edits land in git checkpoints; skills and memory
-  change only through review.
+- **Small models first.** Everything lokal serves to agents (context budgets, structured
+  output, retrieval, skills, code knowledge) is designed for short context windows and
+  weaker tool use, and measured on the target profile, including a CPU-only VM.
+- **Read-only toward your code.** lokal's MCP tools never write to a repository or run a
+  command in it; agent hosts do that under their own approvals. Skills change only
+  through review.
 - **Evidence over claims.** A backend is supported when its contract tests pass; a skill
   is promoted when its evaluation shows it helps; retrieval quality is a number.
 
@@ -138,6 +146,10 @@ Deliverables:
   propagates to the backend.
 - An optional remote or cloud backend only as an explicit opt-in (ADR-0006): labelled in
   every response and trace, never used as a silent fallback.
+- Token counting endpoint for a model or role, so agent hosts can budget their own
+  context instead of discovering the limit by a failed request.
+- Designed for concurrent load from agent hosts: several agents, or one host running
+  sub-agents, calling different roles at once stay within the memory budget.
 - Token budget guard: requests that exceed the configured context fail with an
   OpenAI-shaped `context_length_exceeded` error. The token-count strategy per backend
   (tokenize endpoint or bundled tokenizer) is decided and recorded at the start of M2.
@@ -208,7 +220,7 @@ Deliverables:
 - `lokal skills ls|show|validate|add <path>`.
 - `lokal mcp` over stdio with tools `search_knowledge`, `list_skills`, `get_skill`,
   `list_models`, built on the official Go MCP SDK (version pinned and verified at the
-  start of M4).
+  start of M4). Every lokal MCP tool is read-only (ADR-0008).
 
 Tests: parser and validator against the Agent-Skills catalog; router fixtures (direct,
 paraphrase, near-miss negative); MCP protocol tests through the SDK's in-memory transport.
@@ -216,98 +228,66 @@ paraphrase, near-miss negative); MCP protocol tests through the SDK's in-memory 
 Exit criteria: the Agent-Skills catalog loads and validates; an MCP client (Claude Code)
 can search an indexed collection and fetch a skill through `lokal mcp`.
 
-## M5: Agent runtime and context engine
+## M5: Code knowledge over MCP
 
-Goal: a bounded, safe agent loop that works with small local models, manages its context
-explicitly, survives long sessions, and records traces good enough to learn from
-(ADR-0007).
-
-Deliverables:
-
-- `lokal run "<task>" [--dir] [--model]`: bounded loop (step, token, and time limits),
-  thinking off by default, native tool calls with a JSON-schema fallback for models
-  without tool support, validation errors fed back for retry, cancellation at any step.
-- Tools: `read_file`, `list_dir`, `search_files`, `search_knowledge`, `write_file` (diff
-  preview), `run_shell`, and tools from configured MCP servers (MCP client). Browser,
-  web, and other heavy tools come from MCP servers, not from lokal itself.
-- Policy: tools classed read, write, exec, network; write and exec require approval
-  unless an explicit allow rule matches; paths confined to `--dir`; no network tools by
-  default.
-- Context engine: every model call is assembled from ranked sources within the model's
-  token budget: system prompt, project instruction files (`AGENTS.md`, `CLAUDE.md`, and
-  similar, read as data with a size cap), selected skills, retrieved chunks, session
-  history, tool results, and memory. What is dropped to fit is recorded in the trace;
-  nothing is cut silently.
-- Compaction: as a session nears its budget, older turns and long tool outputs are
-  summarised by the `fast` role into a structured working state (goal, plan, decisions,
-  files touched, open questions); recent turns stay verbatim.
-- Sessions: persisted in `lokal.db` and resumable (`lokal run --resume <id>`);
-  `lokal sessions ls|show|rm`.
-- Memory: project and user memory as plain Markdown files the user can read and edit.
-  The agent proposes memory updates; they are shown in the session and written only when
-  accepted (the review idea of ADR-0005 applied to facts).
-- Roles per step: planning, acting, and summarising can use different models (M2 roles).
-- Skills: the router selects skills per task; a skill may narrow the tool set for its
-  run, which helps small models.
-- Interfaces: an interactive terminal mode that works over SSH, and a headless mode that
-  streams JSON events (for Agent-Control, scripts, and CI).
-- Traces: one JSONL file per run with task, selected skills, context assembly decisions,
-  each model call and tool call (results truncated), approvals, outcome, timings, and the
-  origin of every piece of content (user file, retrieval, tool output, MCP); secrets
-  redacted before writing. `lokal traces ls|show`, and an outcome signal (accept or
-  reject at the end; test results from `run_shell` when present).
-
-Tests: deterministic end-to-end tests with a scripted fake backend; context-assembly
-tests with fixed budgets (priority order, nothing dropped silently); a long scripted
-session that must stay within budget and keep its recorded decisions after compaction;
-resume tests; policy table tests; redaction tests that fail on a planted fake secret.
-
-Exit criteria: on the target profile, a fixed task set (read, search, edit with approval,
-run tests, a long multi-step task that forces compaction, a resumed session) completes
-with a recorded success rate; no write or exec happens without approval in any test.
-
-## M6: Coding agent and vibe coding
-
-Goal: `lokal code` helps write and change software in a repository on the same machine,
-from a small fix to a new app built from a description, with every change reviewable and
-reversible (ADR-0007).
+Goal: any agent working on a repository (Agent-Control, Claude Code, opencode, and
+others) can ask lokal what the code contains and how the project wants to be worked on,
+without lokal ever touching the repository (ADR-0008).
 
 Deliverables:
 
-- Repository understanding: file tree with ignore rules, a repository map of symbols (Go
-  through `go/ast`; other languages through a pure-Go symbol extractor, since tree-sitter
-  needs cgo under ADR-0001), code search, and retrieval over the repository (M3).
-- Edit formats chosen per model capability: search/replace blocks, whole-file rewrites
-  for small files, unified diffs for strong models. Every edit is validated (applies
-  cleanly; the file still parses where a parser exists) before it is written.
-- Git safety: work on a branch or in a separate worktree; one checkpoint commit per
-  accepted step; `lokal code undo`; lokal never pushes.
-- Verify loop: detect build, lint, and test commands (Makefile, `go.mod`, `package.json`,
-  `pyproject.toml`, `Cargo.toml`, and others), run them after edits under the exec
-  approval rules, feed failures back, stop at a step or time budget.
-- Vibe coding: `lokal code new "<description>"` scaffolds a project from template skills,
-  iterates build, run, and test, and serves the app's dev server on loopback so it can be
-  previewed through the same tunnel the gateway uses.
-- Coding skills: per-language and per-framework skills (for example from Agent-Skills)
-  selected by the router.
-- Command execution isolation on top of approvals (for example a container or namespace
-  sandbox when one is available on the host): decided in an ADR at the start of M6.
-- Integrations: coding tools that speak the OpenAI API or MCP (opencode, Continue, Aider,
-  Cline, and others) use `lokal serve` for models and `lokal mcp` for repository
-  knowledge and skills; Agent-Control drives `lokal code` through the headless event
-  stream; an editor protocol (for example the Agent Client Protocol) is evaluated at the
-  start of M6.
-- Coding eval set: fixed repository tasks (fix a failing test, add a function with tests,
-  a small refactor, scaffold a small web app) scored by tests passing, per model and
-  profile, run by `make eval-code`.
+- Repository map: files with ignore rules and a symbol outline per file (Go through
+  `go/ast`; other languages through a pure-Go symbol extractor, since tree-sitter needs
+  cgo under ADR-0001), ranked to fit a token budget the caller passes.
+- Symbol and code search: definitions and references by name, regular-expression search,
+  and retrieval over the repository (M3) in one tool.
+- Project instruction files (`AGENTS.md`, `CLAUDE.md`, and similar) and the project's
+  `.agents/skills/` exposed as MCP resources, so agent hosts load them the same way.
+- Build, lint, and test command detection (Makefile, `go.mod`, `package.json`,
+  `pyproject.toml`, `Cargo.toml`, and others) returned as data for the agent host to run
+  under its own approvals.
+- New `lokal mcp` tools: `repo_map`, `find_symbol`, `search_code`, `project_commands`;
+  all read-only.
 
-Tests: edit-format application and validation against fixture files (including malformed
-edits from weak models); git checkpoint and undo in temporary repositories; verify-loop
-tests with a scripted fake backend and fake build commands.
+Tests: repo-map and symbol extraction against fixture repositories in several languages;
+budget tests (the map never exceeds the requested tokens); MCP protocol tests; a test that
+fails if any MCP tool opens a file for writing.
 
-Exit criteria: on the target profile the coding eval runs end to end with a recorded pass
-rate per model; every edit made during the eval is in git and can be undone; no command
-runs outside the approval rules.
+Exit criteria: Claude Code, and Agent-Control once it has an MCP client, use `repo_map`,
+`find_symbol`, and `search_code` on a real repository through `lokal mcp`; the read-only
+test passes.
+
+## M6: Traces and eval runner
+
+Goal: lokal can see how agents use local models, measure which models and skills work on
+this hardware, and collect the material the forge learns from.
+
+Deliverables:
+
+- Trace format: versioned, documented JSONL (task, model calls, tool calls and results
+  truncated, outcome, timings, and the origin of every piece of content: user file,
+  retrieval, tool output, MCP), with secrets redacted before writing (ADR-0006).
+- Gateway capture (opt-in per client or per role): requests and responses through
+  `lokal serve` written as traces, grouped into conversations.
+- Importers for agent-host session logs, Agent-Control first (its replayable session
+  event log), so the forge sees full sessions, not only model traffic.
+- `lokal eval`: a minimal bounded runner (step, token, and time limits; native tool calls
+  with a JSON-schema fallback) that executes task sets in throwaway directories only. It
+  exists to measure, not to be a product.
+- Task sets per model and profile: agentic tool use (read, search, structured output),
+  coding tasks in temporary repositories (fix a failing test, add a function with tests,
+  small refactor), and skill fixtures for the forge. Results tell agent hosts which local
+  models are worth using on this machine.
+- `lokal traces ls|show|import`.
+
+Tests: trace schema round-trip and versioning; redaction tests that fail on a planted fake
+secret; capture tests through the gateway with a fake backend; importer tests on recorded
+Agent-Control session logs; eval-runner tests with a scripted fake backend, including a
+test that fails if the runner writes outside its throwaway directory.
+
+Exit criteria: on the target profile, the task sets produce a recorded pass rate per
+model; traces from gateway capture and from an imported Agent-Control session validate
+against the format and carry content origin.
 
 ## M7: Skill forge
 
@@ -316,23 +296,23 @@ help, and lets you promote them (ADR-0005).
 
 Deliverables:
 
-- `lokal forge mine`: cluster successful traces (agent, coding, and later multi-agent
-  runs) by task embedding and tool-sequence signature; a cluster needs a minimum number of
-  successful runs to qualify.
+- `lokal forge mine`: cluster successful traces (gateway capture, imported agent-host
+  sessions, and eval runs) by task embedding and tool-sequence signature; a cluster needs
+  a minimum number of successful runs to qualify.
 - `lokal forge draft <cluster>`: the model writes a SKILL.md candidate with provenance
   (trace IDs, content origins) into `candidates/`. Coding sessions yield project-specific
   skills (how to build and test this repository) as well as general ones.
 - `lokal forge eval <candidate>`: fixtures for a direct request, a paraphrase, a near-miss
   that must not trigger, and a failure or adversarial case; run with and without the
-  skill on the same fixtures; report task success, steps, tokens, and trigger precision
-  and recall. Unrun cases count as failures.
+  skill on the same fixtures through `lokal eval`; report task success, steps, tokens, and
+  trigger precision and recall. Unrun cases count as failures.
 - `lokal forge harden <candidate>`: bounded refinement rounds (description for routing,
   body for procedure), each re-evaluated on the same fixtures.
 - Checks before promotion: structural validation, secret and personal-data scan,
   provenance flag for any external content.
 - `lokal skills promote|rollback|export`: promotion shows the skill, provenance, and
   evaluation; versions by content hash; export produces a folder ready to propose to
-  Agent-Skills.
+  Agent-Skills, from which every agent host can load it.
 - Decay report: promoted skills that stopped triggering or whose fixtures now fail.
 
 Prior art: `ws learn` in Agent-Workspace drafts a skill from recorded run decisions; the
@@ -343,43 +323,7 @@ hardened, and promoted, with a measured improvement over the no-skill baseline a
 near-miss misfires; a candidate built from a trace with planted injected instructions is
 flagged and cannot be promoted without the flag being shown.
 
-## M8: Multi-agent
-
-Goal: several agents with different roles, models, tools, and skills work on one task,
-and lokal uses that only where it measurably beats a single agent on local hardware
-(ADR-0007).
-
-Deliverables:
-
-- Agent definitions as files: Markdown with YAML frontmatter (name, description, role or
-  model, tools, skills, budgets) in the project's `.agents/agents/` and in the lokal home;
-  validated like skills; `lokal agents ls|show|validate`. The schema is recorded in an
-  ADR at the start of M8.
-- Orchestrator-workers: a lead agent plans and delegates subtasks to workers that start
-  with fresh, narrow contexts (the main benefit when context windows are small) and
-  return structured results, not transcripts.
-- Starting roles: planner, coder, reviewer, tester, researcher (retrieval). The reviewer
-  gates merging a worker's changes.
-- Scheduler aware of model residency (M2): workers run in parallel only when their models
-  fit in memory together; otherwise they run one after another, grouped by model to avoid
-  reloading.
-- Isolation: each coding worker gets its own git worktree; the lead merges after review.
-- Communication only through the lead (hub and spoke) with typed messages; no free-form
-  agent-to-agent conversation in v1.
-- Traces as a tree of agent runs; the forge learns per-role skills from them.
-- Agent-to-agent protocols with external systems (for example A2A) are evaluated, not
-  committed.
-- Eval: the M6 coding set and a research set, single agent versus multi-agent on the same
-  models and profile; multi-agent becomes a default only for task types where it wins.
-
-Tests: orchestrator tests with scripted fake workers (delegation, typed results, failure
-of one worker, cancellation); scheduler tests against fake memory budgets; worktree
-isolation and merge tests in temporary repositories.
-
-Exit criteria: at least one task type shows a measured gain over a single agent on the
-target profile; parallel workers never exceed the memory budget in any test or eval run.
-
-## M9: v1.0
+## M8: v1.0
 
 Goal: easy to install, stable to depend on.
 
@@ -390,11 +334,12 @@ Deliverables:
 - `install.sh` that verifies checksums; Homebrew tap.
 - `THIRD_PARTY_LICENSES.md` generated from the module graph and checked in CI.
 - Stable surfaces declared and documented: CLI commands and flags, `--json` output
-  shapes, `config.yaml` schema version, gateway endpoints, MCP tool names, the headless
-  JSON event stream, the session format, and the agent definition format.
+  shapes, `config.yaml` schema version, gateway endpoints (including token counting), MCP
+  tool names, and the trace format.
 - Linux GPU path verified (NVIDIA with vLLM or llama-server); Windows support decision
   recorded as an ADR.
-- Documentation per command, troubleshooting by doctor check ID.
+- Documentation per command, troubleshooting by doctor check ID, and a guide per agent
+  host (Agent-Control, Claude Code, opencode, Continue, Aider).
 
 Exit criteria: a user installs with one command on macOS and Linux, `lokal setup` and
 `lokal doctor` are green on all three profiles, and the stable surfaces have tests that
@@ -403,20 +348,20 @@ pin them.
 ## Not planned for v1
 
 - Running models in-process or writing inference kernels.
-- A web UI. Agent-Control is the web control panel; lokal's own interfaces are the
-  terminal and the headless JSON event stream.
-- Free-form multi-agent conversations or open-ended agent swarms.
-- Pushing to remotes, deploying, or publishing on its own.
+- An agent product of its own: an interactive agent loop, a coding agent, vibe coding, or
+  multi-agent orchestration. Agent hosts own those (ADR-0008); `lokal eval` is a
+  measuring tool only.
+- Writing to a user's repository or running commands in it.
+- A web UI (Agent-Control is the web console).
 - Fine-tuning or LoRA training.
 - Multi-user or networked server deployments.
-- Native Windows before the M9 decision.
+- Native Windows before the M8 decision.
 
 ## Candidates after v1
 
 Recorded so they are not lost; each needs its own evaluation before it is planned.
 
-- Vision in the agent loop: screenshots of a running app checked by a vision model, using
-  browser tools from an MCP server.
-- Agent-to-agent interoperability with external systems (for example A2A).
+- Moving an agent loop into lokal, only if a revisit trigger in ADR-0008 fires.
+- Vision models served for agent hosts that check screenshots of running apps.
 - Shared team memory and skills across several lokal hosts.
 - Voice input and output.
