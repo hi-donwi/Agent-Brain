@@ -26,6 +26,9 @@ Status: **M0 in progress.** Nothing beyond `lokal version` is implemented yet.
 - **Orchestrate, do not reimplement.** Engines run models; lokal sets them up, routes,
   checks, retrieves, and learns (ADR-0002).
 - **Local by default.** No egress, no telemetry, loopback only (ADR-0006).
+- **Laptop or headless server, same tool.** lokal runs the same on a desktop and on a
+  dedicated headless Linux VM that other machines reach through a tunnel. Nothing
+  assumes a GUI, a browser, or an interactive terminal.
 - **Evidence over claims.** A backend is supported when its contract tests pass; a skill
   is promoted when its evaluation shows it helps; retrieval quality is a number.
 
@@ -45,7 +48,7 @@ Deliverables:
   embedding truncation, ignored `num_ctx` on `/v1`, thinking budget, working tools and
   structured output (ADR-0002).
 - Spike B: pure-Go SQLite with FTS5 and brute-force vectors. Result: under 30 ms dense
-  search at 100k x 768 on the smallest target; 3-4 s cold load (ADR-0003).
+  search at 100k x 768 on an 8 GB Apple M3; 3-4 s cold load (ADR-0003).
 
 Exit criteria: CI green on `main`; ADRs accepted; spike results recorded.
 
@@ -58,7 +61,8 @@ Deliverables:
 
 - `internal/hw`: CPU model and cores, total and available memory, Apple Silicon unified
   memory, NVIDIA (`nvidia-smi`) and AMD (`rocm-smi`) GPUs with VRAM, free disk on the
-  model directory. macOS and Linux first.
+  model directory. Linux, including virtual machines (hypervisor, vCPU count, GPU
+  passthrough or none), and macOS.
 - `internal/backend` interface and the Ollama adapter on the native API: detect binary
   and server, version, list models with capabilities and context length (`/api/show`),
   pull with progress, chat, embed with `truncate:false`, keep-alive and unload.
@@ -72,20 +76,24 @@ Deliverables:
   models to pull, sizes, disk after install) before doing anything; refuse a plan that
   would leave less than a safety margin of free disk; install the backend through the
   platform's package manager or print the official instruction when that needs
-  privileges; pull models; write `config.yaml`; finish with the doctor.
+  privileges; pull models; write `config.yaml`; finish with the doctor. `--yes` runs
+  unattended over SSH without a terminal.
 - `lokal doctor [--json]`: hardware summary, backend reachable and version, every alias
   resolves to a present model, configured context fits in memory, free disk, and a smoke
   test (one chat round trip, one embedding) with tokens per second. Each failed check
   prints the command that fixes it. Exit codes: 0 healthy, 1 warnings, 2 failures.
 - `lokal models ls|pull|rm`, thin wrappers that respect the catalog and disk checks.
+- The M0 spikes re-run on a CPU-only Linux VM, so catalog defaults for hosts without an
+  accelerator come from measured numbers, not from the Apple Silicon results.
 
 Tests: hardware parsing from captured command output fixtures per OS; adapter tests
 against recorded Ollama responses (the M0 spike cases); setup planner as a pure function
 from (hardware, installed state, catalog) to plan.
 
-Exit criteria: on a clean 8 GB Apple Silicon machine `lokal setup --yes` followed by
-`lokal doctor` is green; the same on a Linux machine without GPU; doctor output for
-"backend not running", "model missing", and "disk too full" is actionable.
+Exit criteria: on a clean headless Linux VM without GPU, `lokal setup --yes` run over
+SSH followed by `lokal doctor` is green; the same on an 8 GB Apple Silicon machine;
+doctor output for "backend not running", "model missing", and "disk too full" is
+actionable.
 
 ## M2: Gateway
 
@@ -107,12 +115,21 @@ Deliverables:
   passing the shared contract test suite against recorded fixtures.
 - Client snippets in `lokal doctor` for Agent-Control, Claude Code-compatible tools,
   opencode, Continue, and generic OpenAI SDKs.
+- `lokal service install|uninstall|status`: a systemd unit on Linux (launchd on macOS)
+  so the gateway and its backend survive reboots on a dedicated VM, logging to the
+  journal.
+- Remote access to a dedicated VM without leaving loopback: documented and tested
+  through an SSH tunnel and through a WireGuard overlay (for example Tailscale); MCP
+  over SSH stdio (`ssh <vm> lokal mcp`) so it needs no open port. A non-loopback bind
+  stays an explicit opt-in that requires the token and TLS; the details are settled in
+  an ADR at the start of M2.
 
 Tests: contract suite per adapter; gateway tests with an in-process fake backend
 (streaming, tool calls, errors, cancellation); auth and Host header tests.
 
-Exit criteria: Agent-Control uses `lokal serve` as a provider for chat and tool calls;
-every listed backend passes the contract suite.
+Exit criteria: Agent-Control, running on another machine, uses `lokal serve` on a
+headless VM through a tunnel as a provider for chat and tool calls; every listed backend
+passes the contract suite.
 
 ## M3: Local retrieval
 
@@ -140,7 +157,7 @@ Deliverables:
 
 Exit criteria: baseline recall@5 and MRR recorded for the tiny profile's embedding
 model; incremental re-index touches only changed files; FTS5 and vector latency
-re-measured on real text.
+re-measured on real text, on both a CPU-only Linux VM and Apple Silicon.
 
 ## M4: Skills runtime and MCP server
 

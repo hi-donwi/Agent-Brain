@@ -30,6 +30,30 @@ This page describes the target design for v1. What exists today is listed in the
 `lokal mcp` exposes knowledge search and skills to other agents (Claude Code, opencode,
 Cursor, Agent-Control), so a cloud model can still use local knowledge and skills.
 
+## Deployment shapes
+
+lokal supports two shapes with the same binary and the same defaults.
+
+| Shape | Where lokal and the backend run | How clients reach it |
+|---|---|---|
+| Workstation | The machine the user works on | Directly on `127.0.0.1` |
+| Dedicated VM | A headless Linux VM (CPU-only or with GPU passthrough), run as a service | From other machines through an SSH tunnel or a WireGuard overlay (for example Tailscale); MCP as `ssh <vm> lokal mcp` over stdio |
+
+```
+  laptop                                         dedicated VM (headless Linux)
+  +------------------------+   SSH tunnel or     +-------------------------------+
+  | Agent-Control, editor, |   WireGuard overlay | lokal serve  (127.0.0.1)      |
+  | Claude Code, scripts   | ------------------> | lokal mcp    (stdio over SSH) |
+  +------------------------+                     | Ollama / llama-server / vLLM  |
+                                                 | lokal home: index, traces     |
+                                                 +-------------------------------+
+```
+
+On a VM the gateway still binds loopback (ADR-0006); the tunnel provides reachability
+and the SSH or overlay identity provides access control on top of the bearer token. The
+files to index live on the VM (synced or mounted there), so retrieval never ships file
+contents across the network except as answers to the client that asked.
+
 ## Package layout
 
 | Package | Responsibility | Milestone |
@@ -124,3 +148,8 @@ until promoted (ADR-0005).
 
 Profiles are data in the model catalog; each entry states memory needs *including* the
 context it is configured for, because context memory is not negligible (ADR-0002).
+
+A profile is chosen from memory *and* accelerator together. A CPU-only VM with 16-32 GB
+of RAM can hold a mid-size model but generates far more slowly than Apple Silicon or a
+GPU, so CPU-only hosts get smaller default models than their memory alone allows; the
+defaults come from measurements on a CPU-only VM (M1).

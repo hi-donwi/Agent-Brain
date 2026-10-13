@@ -1,6 +1,7 @@
 # Agent-Local
 
-**lokal** sets up and runs AI on your own machine: it picks and installs a local
+**lokal** sets up and runs AI on hardware you control, a workstation or a dedicated
+headless VM that your other machines reach through a tunnel: it picks and installs a local
 inference backend and models that fit your hardware, serves them behind one
 OpenAI-compatible endpoint, indexes your files for retrieval with citations, runs a small
 tool-using agent with approvals, and learns reusable skills from your own work, which
