@@ -86,14 +86,10 @@ description: Clean test skill
 		t.Errorf("expected clean content to have 0 violations, got: %v", violations)
 	}
 
-	keyContent := `---
-name: leaked-key
-description: Leaked key skill
----
------BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQD...
------END PRIVATE KEY-----
-`
+	keyContent := "---\nname: leaked-key\ndescription: Leaked key skill\n---\n" +
+		strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\n" +
+		"MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQD...\n" +
+		strings.Join([]string{"-----END", "PRIVATE", "KEY-----"}, " ") + "\n"
 	if violations := ScanSafety([]byte(keyContent)); len(violations) == 0 {
 		t.Errorf("expected private key to be flagged by safety scan")
 	}

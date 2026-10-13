@@ -129,7 +129,10 @@ func TestToken_Generate_and_Load(t *testing.T) {
 }
 
 func TestMiddleware_Auth_and_Host(t *testing.T) {
-	token := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	token, err := gateway.GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken failed: %v", err)
+	}
 	adapter := &mockGatewayAdapter{}
 
 	s, err := gateway.NewServer(gateway.ServerConfig{
