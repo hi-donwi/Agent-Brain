@@ -25,9 +25,6 @@ const (
 // Default is the check list `lokal doctor` runs on this host.
 func Default() []Check {
 	defaultLayout := home.Default
-	defaultAdapter := func() (backend.Adapter, error) {
-		return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
-	}
 	defaultConfig := func() (*home.Config, error) {
 		l, err := defaultLayout()
 		if err != nil {
@@ -35,6 +32,15 @@ func Default() []Check {
 		}
 		return l.LoadConfig()
 	}
+	defaultAdapter := func() (backend.Adapter, error) {
+		cfg, err := defaultConfig()
+		if err == nil && cfg != nil {
+			engine, bCfg := cfg.PrimaryBackend()
+			return backend.NewAdapter(engine, bCfg.Endpoint, bCfg.Token, nil)
+		}
+		return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
+	}
+
 	return []Check{
 		HardwareCheck(hw.Detect),
 		HomeCheck(defaultLayout),
@@ -188,8 +194,19 @@ func BackendCheck(resolveConfig func() (*home.Config, error), resolveAdapter fun
 		ver, err := ad.Version(ctx)
 		if err != nil {
 			fix := "start the backend (e.g. brew services start ollama or systemctl start ollama)"
-			if runtime.GOOS == "darwin" {
-				fix = "brew services start ollama (or open /Applications/Ollama.app)"
+			switch ad.Name() {
+			case "remote", "gateway":
+				fix = "ensure the remote host or SSH tunnel is active (e.g. ssh -N -L 52140:127.0.0.1:52140 <vm>)"
+			case "llamacpp":
+				fix = "start llama-server (e.g. llama-server -m <model.gguf> --port 8080)"
+			case "vllm":
+				fix = "start vLLM (e.g. vllm serve <model> --port 8000)"
+			case "lmstudio":
+				fix = "start LM Studio and enable the local inference server"
+			default:
+				if runtime.GOOS == "darwin" {
+					fix = "brew services start ollama (or open /Applications/Ollama.app)"
+				}
 			}
 
 			// If config is not yet created, report as warning rather than failure

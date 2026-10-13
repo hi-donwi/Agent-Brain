@@ -31,7 +31,15 @@ func defaultSetupDeps() SetupDeps {
 		ResolveHome: home.Default,
 		FreeBytes:   hw.FreeBytes,
 		CheckBackend: func(ctx context.Context) (bool, []string, error) {
-			ad := backend.NewOllama(backend.DefaultOllamaEndpoint, nil)
+			var ad backend.Adapter = backend.NewOllama(backend.DefaultOllamaEndpoint, nil)
+			if l, err := home.Default(); err == nil {
+				if cfg, err := l.LoadConfig(); err == nil && cfg != nil {
+					engine, bCfg := cfg.PrimaryBackend()
+					if customAd, err := backend.NewAdapter(engine, bCfg.Endpoint, bCfg.Token, nil); err == nil {
+						ad = customAd
+					}
+				}
+			}
 			models, err := ad.ListModels(ctx)
 			if err != nil {
 				return false, nil, nil
@@ -43,8 +51,15 @@ func defaultSetupDeps() SetupDeps {
 			return true, names, nil
 		},
 		ResolveAdapter: func() (backend.Adapter, error) {
+			if l, err := home.Default(); err == nil {
+				if cfg, err := l.LoadConfig(); err == nil && cfg != nil {
+					engine, bCfg := cfg.PrimaryBackend()
+					return backend.NewAdapter(engine, bCfg.Endpoint, bCfg.Token, nil)
+				}
+			}
 			return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
 		},
+
 		RunDoctor: func(ctx context.Context) (doctor.Report, error) {
 			return doctor.Run(ctx, doctor.Default()), nil
 		},

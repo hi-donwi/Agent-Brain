@@ -27,6 +27,13 @@ type ModelsDeps struct {
 func defaultModelsDeps() ModelsDeps {
 	return ModelsDeps{
 		ResolveAdapter: func() (backend.Adapter, error) {
+			l, err := home.Default()
+			if err == nil {
+				if cfg, err := l.LoadConfig(); err == nil && cfg != nil {
+					engine, bCfg := cfg.PrimaryBackend()
+					return backend.NewAdapter(engine, bCfg.Endpoint, bCfg.Token, nil)
+				}
+			}
 			return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
 		},
 		ResolveHome: home.Default,

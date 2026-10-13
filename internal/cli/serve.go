@@ -29,6 +29,13 @@ func defaultServeDeps() ServeDeps {
 	return ServeDeps{
 		ResolveHome: home.Default,
 		ResolveAdapter: func() (backend.Adapter, error) {
+			l, err := home.Default()
+			if err == nil {
+				if cfg, err := l.LoadConfig(); err == nil && cfg != nil {
+					engine, bCfg := cfg.PrimaryBackend()
+					return backend.NewAdapter(engine, bCfg.Endpoint, bCfg.Token, nil)
+				}
+			}
 			return backend.NewOllama(backend.DefaultOllamaEndpoint, nil), nil
 		},
 		Catalog: catalog.Default(),

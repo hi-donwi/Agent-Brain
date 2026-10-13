@@ -175,3 +175,35 @@ func TestConfig_NotFound(t *testing.T) {
 		t.Fatalf("expected errors.Is(err, os.ErrNotExist), got: %v", err)
 	}
 }
+
+func TestConfig_PrimaryBackend(t *testing.T) {
+	cfg := &home.Config{
+		Version: 1,
+		Profile: "tiny",
+		Backends: map[string]home.BackendConfig{
+			"remote": {
+				Endpoint: "http://127.0.0.1:52140",
+				Token:    "secret-token-123",
+				Enabled:  true,
+			},
+			"ollama": {
+				Endpoint: "http://127.0.0.1:11434",
+				Enabled:  false,
+			},
+		},
+		Aliases: map[string]string{
+			"chat": "qwen2.5-coder-1.5b",
+		},
+	}
+
+	name, backendCfg := cfg.PrimaryBackend()
+	if name != "remote" {
+		t.Errorf("expected primary backend 'remote', got %q", name)
+	}
+	if backendCfg.Token != "secret-token-123" {
+		t.Errorf("expected token 'secret-token-123', got %q", backendCfg.Token)
+	}
+	if backendCfg.Endpoint != "http://127.0.0.1:52140" {
+		t.Errorf("expected endpoint 'http://127.0.0.1:52140', got %q", backendCfg.Endpoint)
+	}
+}

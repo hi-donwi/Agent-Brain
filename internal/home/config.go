@@ -13,9 +13,10 @@ import (
 // CurrentConfigVersion is the schema version written by this release of lokal.
 const CurrentConfigVersion = 1
 
-// BackendConfig holds network endpoint and enable state for one backend engine.
+// BackendConfig holds network endpoint, optional token, and enable state for one backend engine.
 type BackendConfig struct {
 	Endpoint string `yaml:"endpoint"`
+	Token    string `yaml:"token,omitempty"`
 	Enabled  bool   `yaml:"enabled"`
 }
 
@@ -74,6 +75,22 @@ func (c *Config) Validate() error {
 		return errors.New("chat alias must be configured")
 	}
 	return nil
+}
+
+// PrimaryBackend returns the name and configuration of the first enabled backend.
+func (c *Config) PrimaryBackend() (string, BackendConfig) {
+	for name, b := range c.Backends {
+		if b.Enabled {
+			return name, b
+		}
+	}
+	for name, b := range c.Backends {
+		return name, b
+	}
+	return "ollama", BackendConfig{
+		Endpoint: "http://127.0.0.1:11434",
+		Enabled:  true,
+	}
 }
 
 // LoadConfig reads, parses, and validates the YAML config at path.
