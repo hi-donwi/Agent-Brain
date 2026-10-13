@@ -1,0 +1,60 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel Xeon Processor (Cascadelake)
+stepping	: 6
+cpu MHz		: 2992.968
+cache size	: 16384 KB
+physical id	: 0
+siblings	: 4
+core id		: 0
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni arch_capabilities
+bogomips	: 5985.93
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel Xeon Processor (Cascadelake)
+stepping	: 6
+cpu MHz		: 2992.968
+cache size	: 16384 KB
+physical id	: 0
+siblings	: 4
+core id		: 1
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni arch_capabilities
+bogomips	: 5985.93
+
+processor	: 2
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel Xeon Processor (Cascadelake)
+stepping	: 6
+cpu MHz		: 2992.968
+cache size	: 16384 KB
+physical id	: 0
+siblings	: 4
+core id		: 2
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni arch_capabilities
+bogomips	: 5985.93
+
+processor	: 3
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 85
+model name	: Intel Xeon Processor (Cascadelake)
+stepping	: 6
+cpu MHz		: 2992.968
+cache size	: 16384 KB
+physical id	: 0
+siblings	: 4
+core id		: 3
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch avx2 avx512f avx512dq avx512cd avx512bw avx512vl avx512_vnni arch_capabilities
+bogomips	: 5985.93
+
