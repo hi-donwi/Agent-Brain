@@ -1,0 +1,4 @@
+hw.memsize: 17179869184
+hw.ncpu: 4
+machdep.cpu.brand_string: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
+kern.hv_vmm_present: 1

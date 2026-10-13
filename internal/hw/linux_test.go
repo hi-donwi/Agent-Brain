@@ -177,6 +177,7 @@ func TestDetectLinuxKVMGuest(t *testing.T) {
 		Memory:         Memory{TotalBytes: 16384000 * kib, AvailableBytes: 14123456 * kib},
 		GPUs:           []GPU{},
 		Virtualization: Virtualization{Guest: true, Hypervisor: "qemu"},
+		Accelerator:    AcceleratorNone,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DetectLinux() =\n%+v\nwant\n%+v", got, want)
@@ -211,6 +212,9 @@ func TestDetectLinuxBareMetalWithNvidia(t *testing.T) {
 	}
 	if len(got.GPUs) != 2 || got.GPUs[0].MemoryBytes != 24564*mib {
 		t.Fatalf("GPUs = %+v", got.GPUs)
+	}
+	if got.Accelerator != AcceleratorCUDA {
+		t.Fatalf("Accelerator = %q, want %q with NVIDIA GPUs", got.Accelerator, AcceleratorCUDA)
 	}
 	if len(got.Warnings) != 0 {
 		t.Fatalf("Warnings = %v, want none", got.Warnings)

@@ -60,6 +60,10 @@ func DetectLinux(fsys fs.FS, arch string, nvidiaSMI func() ([]byte, error)) (Inf
 			}
 		}
 	}
+	info.Accelerator = AcceleratorNone
+	if len(info.GPUs) > 0 {
+		info.Accelerator = AcceleratorCUDA
+	}
 	return info, nil
 }
 
