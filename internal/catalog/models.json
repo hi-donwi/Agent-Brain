@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "qwen2.5-coder-1.5b",
+      "name": "Qwen 2.5 Coder 1.5B",
+      "roles": ["chat", "code"],
+      "params": "1.5B",
+      "quant": "Q4_K_M",
+      "download_bytes": 986000000,
+      "memory_bytes": 1500000000,
+      "max_context": 32768,
+      "licence": "Apache-2.0",
+      "capabilities": {
+        "tools": true,
+        "thinking": false,
+        "vision": false
+      },
+      "backends": {
+        "ollama": "qwen2.5-coder:1.5b"
+      },
+      "unmeasured": true
+    },
+    {
+      "id": "qwen2.5-coder-7b",
+      "name": "Qwen 2.5 Coder 7B",
+      "roles": ["chat", "code"],
+      "params": "7B",
+      "quant": "Q4_K_M",
+      "download_bytes": 4700000000,
+      "memory_bytes": 5500000000,
+      "max_context": 32768,
+      "licence": "Apache-2.0",
+      "capabilities": {
+        "tools": true,
+        "thinking": false,
+        "vision": false
+      },
+      "backends": {
+        "ollama": "qwen2.5-coder:7b"
+      },
+      "unmeasured": true
+    },
+    {
+      "id": "qwen2.5-coder-32b",
+      "name": "Qwen 2.5 Coder 32B",
+      "roles": ["chat", "code"],
+      "params": "32B",
+      "quant": "Q4_K_M",
+      "download_bytes": 20000000000,
+      "memory_bytes": 22000000000,
+      "max_context": 32768,
+      "licence": "Apache-2.0",
+      "capabilities": {
+        "tools": true,
+        "thinking": false,
+        "vision": false
+      },
+      "backends": {
+        "ollama": "qwen2.5-coder:32b"
+      },
+      "unmeasured": true
+    },
+    {
+      "id": "nomic-embed-text",
+      "name": "Nomic Embed Text v1.5",
+      "roles": ["embed"],
+      "params": "137M",
+      "quant": "Q4_K_M",
+      "download_bytes": 274000000,
+      "memory_bytes": 500000000,
+      "max_context": 8192,
+      "licence": "Apache-2.0",
+      "capabilities": {
+        "tools": false,
+        "thinking": false,
+        "vision": false
+      },
+      "backends": {
+        "ollama": "nomic-embed-text:latest"
+      },
+      "unmeasured": true
+    },
+    {
+      "id": "bge-reranker-large",
+      "name": "BAAI BGE Reranker Large",
+      "roles": ["rerank"],
+      "params": "560M",
+      "quant": "Q4_K_M",
+      "download_bytes": 670000000,
+      "memory_bytes": 1200000000,
+      "max_context": 512,
+      "licence": "Apache-2.0",
+      "capabilities": {
+        "tools": false,
+        "thinking": false,
+        "vision": false
+      },
+      "backends": {
+        "ollama": "bge-reranker-large:latest"
+      },
+      "unmeasured": true
+    }
+  ],
+  "profiles": [
+    {
+      "name": "tiny",
+      "description": "For 8 GB machines or CPU-only hosts with up to 32 GB RAM",
+      "defaults": {
+        "chat": "qwen2.5-coder-1.5b",
+        "code": "qwen2.5-coder-1.5b",
+        "embed": "nomic-embed-text"
+      }
+    },
+    {
+      "name": "standard",
+      "description": "For 16-32 GB machines with GPU/Metal or 64 GB+ CPU-only hosts",
+      "defaults": {
+        "chat": "qwen2.5-coder-7b",
+        "code": "qwen2.5-coder-7b",
+        "embed": "nomic-embed-text",
+        "rerank": "bge-reranker-large"
+      }
+    },
+    {
+      "name": "workstation",
+      "description": "For 64 GB+ machines with GPU/Metal or 24 GB+ VRAM",
+      "defaults": {
+        "chat": "qwen2.5-coder-32b",
+        "code": "qwen2.5-coder-32b",
+        "embed": "nomic-embed-text",
+        "rerank": "bge-reranker-large"
+      }
+    }
+  ]
+}
