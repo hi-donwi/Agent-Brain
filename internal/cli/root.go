@@ -16,8 +16,10 @@ func NewRootCmd() *cobra.Command {
 		Use:   "lokal",
 		Short: "lokal - set up and run AI on your own machine",
 		Long: `lokal sets up local inference backends, serves local models behind one
-OpenAI-compatible endpoint, indexes your files for retrieval, runs a small
-local agent, and learns reusable skills from your own sessions.
+OpenAI-compatible endpoint, indexes your files and code for retrieval, serves
+that knowledge and your skills to agents over MCP, and learns reusable skills
+from how your agents work. It is the local layer under your agents, not
+another agent.
 
 Everything stays on this machine unless you explicitly configure otherwise.
 Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
