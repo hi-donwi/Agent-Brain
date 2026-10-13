@@ -69,6 +69,9 @@ func layout(root string) Layout {
 // Existing directories are left as they are; files are created by their owners.
 func (l Layout) Ensure() error {
 	for _, dir := range []string{l.Root, l.Skills, l.Candidates, l.Traces} {
+		if dir == "" {
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}

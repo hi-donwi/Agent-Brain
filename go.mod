@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/mark3labs/mcp-go v0.8.5
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.36.0
