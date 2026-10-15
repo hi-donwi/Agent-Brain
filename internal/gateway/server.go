@@ -88,6 +88,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
 	mux.HandleFunc("POST /v1beta/", s.handleGeminiGenerateContent)
+	mux.HandleFunc("GET /v1beta/models", s.handleGeminiModelMetadata)
+	mux.HandleFunc("GET /v1beta/models/", s.handleGeminiModelMetadata)
 	mux.HandleFunc("POST /v1/tokens", s.handleTokens)
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 
@@ -180,45 +182,47 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	// 1. Add configured semantic roles as virtual models
-	if s.cfg.UserConfig != nil && s.cfg.UserConfig.Aliases != nil {
-		for role := range s.cfg.UserConfig.Aliases {
-			models = append(models, openAIModel{
-				ID:      role,
-				Object:  "model",
-				Created: now,
-				OwnedBy: "brain",
-			})
-		}
-	} else {
-		for _, role := range []string{"chat", "code", "embed"} {
-			models = append(models, openAIModel{
-				ID:      role,
-				Object:  "model",
-				Created: now,
-				OwnedBy: "brain",
-			})
-		}
-	}
-
-	// 2. Add backend installed models if backend is available
-	if s.cfg.Adapter != nil {
-		backendModels, err := s.cfg.Adapter.ListModels(ctx)
-		if err == nil {
-			for _, bm := range backendModels {
-				created := now
-				if !bm.ModifiedAt.IsZero() {
-					created = bm.ModifiedAt.Unix()
-				}
+	if accountSelection(r) == "" && s.cfg.Adapter != nil {
+		if s.cfg.UserConfig != nil && s.cfg.UserConfig.Aliases != nil {
+			for role := range s.cfg.UserConfig.Aliases {
 				models = append(models, openAIModel{
-					ID:      bm.Name,
+					ID:      role,
 					Object:  "model",
-					Created: created,
-					OwnedBy: s.cfg.Adapter.Name(),
+					Created: now,
+					OwnedBy: "brain",
+				})
+			}
+		} else {
+			for _, role := range []string{"chat", "code", "embed"} {
+				models = append(models, openAIModel{
+					ID:      role,
+					Object:  "model",
+					Created: now,
+					OwnedBy: "brain",
 				})
 			}
 		}
-	}
 
+		// 2. Add backend installed models if backend is available
+		if s.cfg.Adapter != nil {
+			backendModels, err := s.cfg.Adapter.ListModels(ctx)
+			if err == nil {
+				for _, bm := range backendModels {
+					created := now
+					if !bm.ModifiedAt.IsZero() {
+						created = bm.ModifiedAt.Unix()
+					}
+					models = append(models, openAIModel{
+						ID:      bm.Name,
+						Object:  "model",
+						Created: created,
+						OwnedBy: s.cfg.Adapter.Name(),
+					})
+				}
+			}
+		}
+
+	}
 	// 3. Add accounts and supported cloud models from router pool
 	if s.cfg.AccountPool != nil {
 		for _, acc := range s.cfg.AccountPool.ListAccounts() {
@@ -242,6 +246,15 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	unique := make([]openAIModel, 0, len(models))
+	seen := make(map[string]bool)
+	for _, m := range models {
+		if !seen[m.ID] {
+			unique = append(unique, m)
+			seen[m.ID] = true
+		}
+	}
+	models = unique
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(openAIModelList{
 		Object: "list",
@@ -751,8 +764,16 @@ type embedResponse struct {
 
 func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	body, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		writeAPIError(w, 400, "cannot read embeddings request", "invalid_request_error", "bad_request")
+		return
+	}
+	if s.tryProxy(w, r, body, router.ProtocolEmbeddings, "") {
+		return
+	}
 	var req embedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
 		return
 	}

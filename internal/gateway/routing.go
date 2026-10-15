@@ -163,3 +163,35 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 func withAccountScope(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, accountScopeKey{}, id)
 }
+
+func (s *Server) handleGeminiModelMetadata(w http.ResponseWriter, r *http.Request) {
+	provider := router.ProviderGemini
+	pinned := ""
+	if selected := accountSelection(r); selected != "" {
+		a, err := s.poolAccount(selected)
+		if err != nil {
+			writeAPIError(w, 404, "selected account was not found", "invalid_request_error", "account_not_found")
+			return
+		}
+		provider = a.Provider
+		pinned = a.ID
+		if !a.Supports(router.ProtocolGemini) {
+			writeAPIError(w, 400, "selected account does not support Gemini metadata", "invalid_request_error", "protocol_not_supported")
+			return
+		}
+	}
+	if s.proxy == nil {
+		writeAPIError(w, 503, "no Gemini-compatible provider account configured", "api_error", "account_unavailable")
+		return
+	}
+	path := r.URL.Path
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	resp, _, err := s.proxy.ForwardMetadataRequest(r.Context(), provider, pinned, path, r.Header)
+	if err != nil {
+		writeAPIError(w, 502, "provider metadata request failed", "api_error", "upstream_error")
+		return
+	}
+	_ = router.StreamResponse(w, resp)
+}

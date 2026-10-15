@@ -40,11 +40,31 @@ func (h *ProxyHandler) ForwardRequest(ctx context.Context, provider string, targ
 
 // ForwardSelectedRequest pins an explicit account or tries each pool candidate once.
 func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pinned, targetPath string, body []byte, headers http.Header) (*http.Response, *Account, error) {
+	return h.forward(ctx, provider, pinned, targetPath, http.MethodPost, body, headers)
+}
+
+// ForwardMetadataRequest preserves the provider's model metadata without inference.
+func (h *ProxyHandler) ForwardMetadataRequest(ctx context.Context, provider, pinned, path string, headers http.Header) (*http.Response, *Account, error) {
+	return h.forward(ctx, provider, pinned, path, http.MethodGet, nil, headers)
+}
+
+func (h *ProxyHandler) forward(ctx context.Context, provider, pinned, targetPath, method string, body []byte, headers http.Header) (*http.Response, *Account, error) {
 	definition, err := LookupProvider(provider)
 	if err != nil {
 		return nil, nil, err
 	}
 	provider = definition.ID
+	if pinned == "" && (provider == "custom" || provider == "opencode-zen") {
+		origins := make(map[string]bool)
+		for _, a := range h.pool.ListAccounts() {
+			if a.Enabled && a.Provider == provider {
+				origins[strings.TrimRight(a.BaseURL, "/")] = true
+			}
+		}
+		if len(origins) > 1 {
+			return nil, nil, fmt.Errorf("select an explicit account when compatible endpoints differ")
+		}
+	}
 	tried := make(map[string]bool)
 	maxRetries := len(h.pool.ListAccounts())
 
@@ -55,6 +75,9 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 	}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		acc, err := h.pool.selectAccount(provider, pinned, tried)
 		if err != nil {
 			return nil, nil, fmt.Errorf("account selection failed: %w", err)
@@ -62,19 +85,23 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 
 		tried[acc.ID] = true
 		if acc.Auth == AuthOAuth {
+			if acc.BridgeCredential == "" {
+				continue
+			}
 			bridge := BridgeClient{URL: acc.BridgeURL, Key: acc.BridgeKey, Client: h.client}
 			if _, err := bridge.Verify(ctx, acc.Provider, acc.BridgeCredential); err != nil {
-				h.pool.ReportResult(acc.ID, 401, 0)
 				continue
 			}
 		}
 		protocol := ProtocolChat
 		switch {
+		case strings.HasPrefix(targetPath, "/v1/embeddings"):
+			protocol = ProtocolEmbeddings
 		case strings.HasPrefix(targetPath, "/v1/responses"):
 			protocol = ProtocolResponses
 		case strings.HasPrefix(targetPath, "/v1/messages"):
 			protocol = ProtocolMessages
-		case strings.HasPrefix(targetPath, "/v1beta/models/"):
+		case strings.HasPrefix(targetPath, "/v1beta/models"):
 			protocol = ProtocolGemini
 		}
 		if !acc.Supports(protocol) {
@@ -84,6 +111,12 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 			Model string `json:"model"`
 		}
 		_ = json.Unmarshal(body, &requested)
+		if protocol == ProtocolGemini {
+			parsed, _ := url.Parse(targetPath)
+			if name, ok := strings.CutPrefix(parsed.Path, "/v1beta/models/"); ok {
+				requested.Model, _, _ = strings.Cut(name, ":")
+			}
+		}
 		if len(acc.Models) > 0 && requested.Model != "" && !contains(acc.Models, requested.Model) {
 			continue
 		}
@@ -98,6 +131,9 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 			return nil, acc, err
 		}
 		path := targetPath
+		if provider == ProviderDeepSeek {
+			path = strings.TrimPrefix(path, "/v1")
+		}
 		if parsed, err := url.Parse(path); err == nil {
 			query := parsed.Query()
 			for _, name := range []string{"key", "api_key", "access_token"} {
@@ -115,14 +151,18 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 
 		targetURL := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(processedBody))
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, bytes.NewReader(processedBody))
 		if err != nil {
 			return nil, acc, fmt.Errorf("create upstream request: %w", err)
 		}
 
 		// Copy non-hop headers
+		connectionHeaders := make(map[string]bool)
+		for _, value := range strings.Split(headers.Get("Connection"), ",") {
+			connectionHeaders[strings.ToLower(strings.TrimSpace(value))] = true
+		}
 		for k, v := range headers {
-			if sensitiveHeader(k) || hopHeader(k) {
+			if sensitiveHeader(k) || hopHeader(k) || connectionHeaders[strings.ToLower(k)] {
 				continue
 			}
 			req.Header[k] = append([]string(nil), v...)
@@ -130,17 +170,17 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 
 		// Inject active account credential
 		key, keyErr := ResolveCredential(acc.APIKey)
-		if keyErr != nil {
+		if keyErr != nil || (acc.Auth == AuthAPIKey && key == "") {
 			h.pool.ReportResult(acc.ID, 401, 0)
 			continue
 		}
 		if key != "" {
-			if acc.Provider == ProviderAnthropic {
+			if protocol == ProtocolMessages && acc.Auth != AuthOAuth {
 				req.Header.Set("x-api-key", key)
 				if req.Header.Get("anthropic-version") == "" {
 					req.Header.Set("anthropic-version", "2023-06-01")
 				}
-			} else if acc.Provider == ProviderGemini && strings.HasPrefix(path, "/v1beta/models/") {
+			} else if protocol == ProtocolGemini && acc.Auth != AuthOAuth {
 				req.Header.Set("x-goog-api-key", key)
 			} else {
 				req.Header.Set("Authorization", "Bearer "+key)
@@ -202,29 +242,38 @@ func hopHeader(k string) bool {
 }
 
 func (h *ProxyHandler) optimizePayload(body []byte) []byte {
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(body, &payload) != nil {
 		return body
 	}
-
-	// Optimize messages if present
-	if msgs, ok := payload["messages"].([]interface{}); ok {
-		for _, m := range msgs {
-			if msgMap, ok := m.(map[string]interface{}); ok {
-				if msgMap["role"] != "tool" && msgMap["role"] != "function" {
-					continue
-				}
-				if content, ok := msgMap["content"].(string); ok {
-					msgMap["content"] = CompressToolResult(content)
-				}
-			}
+	var messages []map[string]json.RawMessage
+	if json.Unmarshal(payload["messages"], &messages) != nil {
+		return body
+	}
+	changed := false
+	for _, message := range messages {
+		var role, content string
+		if json.Unmarshal(message["role"], &role) != nil || (role != "tool" && role != "function") {
+			continue
 		}
-		if optimized, err := json.Marshal(payload); err == nil {
-			return optimized
+		if json.Unmarshal(message["content"], &content) != nil {
+			continue
+		}
+		compressed := CompressToolResult(content)
+		if compressed != content {
+			message["content"], _ = json.Marshal(compressed)
+			changed = true
 		}
 	}
-
-	return body
+	if !changed {
+		return body
+	}
+	payload["messages"], _ = json.Marshal(messages)
+	result, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return result
 }
 
 func parseRetryAfter(header string) time.Duration {

@@ -80,3 +80,43 @@ func TestCloudChatAcceptsStructuredMessages(t *testing.T) {
 		t.Fatalf("structured cloud request rejected: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestCloudEmbeddingsUsesSelectedAccount(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Errorf("wrong embeddings path: %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[0.1,0.2]}]}`)
+	}))
+	defer upstream.Close()
+	s, _ := gateway.NewServer(gateway.ServerConfig{Token: "master", AccountPool: router.NewAccountPool(router.RouterConfig{Accounts: []router.Account{{ID: "embed", Provider: router.ProviderOpenAI, Enabled: true, APIKey: "fake", BaseURL: upstream.URL}}})})
+	req := httptest.NewRequest("POST", "/v1/embeddings", strings.NewReader(`{"model":"text-embedding-3-test","input":["text"]}`))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer master")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "embedding") {
+		t.Fatalf("cloud embeddings rejected: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGeminiModelDiscoveryUsesSelectedAccountCredential(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/v1beta/models" {
+			t.Errorf("unexpected discovery request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("x-goog-api-key") != "fake-provider-key" || r.URL.Query().Get("key") != "" {
+			t.Error("gateway credential was not replaced for metadata discovery")
+		}
+		_, _ = io.WriteString(w, `{"models":[{"name":"models/gemini-test"}]}`)
+	}))
+	defer upstream.Close()
+	s, _ := gateway.NewServer(gateway.ServerConfig{Token: "master", AccountPool: router.NewAccountPool(router.RouterConfig{Accounts: []router.Account{{ID: "google", Provider: router.ProviderGemini, Enabled: true, APIKey: "fake-provider-key", BaseURL: upstream.URL}}})})
+	req := httptest.NewRequest("GET", "/v1beta/models?key="+gateway.ScopedToken("master", "google"), nil)
+	req.Host = "127.0.0.1"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "gemini-test") {
+		t.Fatalf("Gemini discovery rejected: %d %s", rec.Code, rec.Body.String())
+	}
+}

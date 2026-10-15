@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,52 @@ func TestAuditAntigravityProviderDoesNotFallBackToLocal(t *testing.T) {
 	}
 	if err == nil && target == "" {
 		t.Fatal("expected a provider adapter or an explicit unsupported-provider error")
+	}
+}
+
+func TestTokenSaverPreservesUserContentAndLargeNumbers(t *testing.T) {
+	input := []byte(`{"seed":9007199254740993,"messages":[{"role":"user","content":"keep\n\n\n\nthese lines"}]}`)
+	h := NewProxyHandler(NewAccountPool(DefaultRouterConfig()), true)
+	got := string(h.optimizePayload(input))
+	if !strings.Contains(got, "9007199254740993") || !strings.Contains(got, `keep\n\n\n\nthese lines`) {
+		t.Fatal("token saver changed non-tool request fields")
+	}
+}
+
+func TestCustomEndpointsRequireAnAccountSelectorWhenOriginsDiffer(t *testing.T) {
+	pool := NewAccountPool(RouterConfig{Accounts: []Account{{ID: "one", Provider: "custom", Enabled: true, BaseURL: "https://one.example.invalid"}, {ID: "two", Provider: "custom", Enabled: true, BaseURL: "https://two.example.invalid"}}})
+	h := NewProxyHandler(pool, false)
+	called := false
+	h.client.Transport = auditTransport(func(*http.Request) (*http.Response, error) {
+		called = true
+		return &http.Response{StatusCode: 200, Body: http.NoBody, Header: make(http.Header)}, nil
+	})
+	response, _, err := h.ForwardRequest(context.Background(), "custom", "/v1/chat/completions", []byte(`{"model":"shared-name"}`), nil)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || called {
+		t.Fatal("custom provider routing silently selected one of several unrelated endpoints")
+	}
+}
+
+func TestCustomProviderUsesProtocolCredentialHeaders(t *testing.T) {
+	for _, test := range []struct{ path, protocol, header string }{{"/v1/messages", ProtocolMessages, "x-api-key"}, {"/v1beta/models/model:generateContent", ProtocolGemini, "x-goog-api-key"}} {
+		t.Run(test.protocol, func(t *testing.T) {
+			pool := NewAccountPool(RouterConfig{Accounts: []Account{{ID: "one", Provider: "custom", Enabled: true, APIKey: "fake-custom-key", BaseURL: "http://127.0.0.1:1234", Protocols: []string{test.protocol}}}})
+			h := NewProxyHandler(pool, false)
+			h.client.Transport = auditTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Header.Get(test.header) != "fake-custom-key" {
+					t.Error("protocol credential header was not injected")
+				}
+				return &http.Response{StatusCode: 200, Body: http.NoBody, Header: make(http.Header)}, nil
+			})
+			resp, _, err := h.ForwardRequest(context.Background(), "custom", test.path, []byte(`{}`), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+		})
 	}
 }
 
