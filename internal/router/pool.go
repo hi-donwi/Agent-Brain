@@ -196,3 +196,42 @@ func ResolveAPIKey(rawKey string) string {
 	}
 	return raw
 }
+
+// DetectProvider infers the upstream AI provider from a model name or alias.
+func DetectProvider(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.HasPrefix(m, "claude") || strings.HasPrefix(m, "anthropic/"):
+		return ProviderAnthropic
+	case strings.HasPrefix(m, "gpt-") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") ||
+		strings.HasPrefix(m, "text-embedding-3") || strings.HasPrefix(m, "openai/"):
+		return ProviderOpenAI
+	case strings.HasPrefix(m, "gemini") || strings.HasPrefix(m, "google/"):
+		return ProviderGemini
+	case m == "deepseek-chat" || m == "deepseek-reasoner" || strings.HasPrefix(m, "deepseek/"):
+		return ProviderDeepSeek
+	case strings.Contains(m, "/"):
+		return ProviderOpenRouter
+	default:
+		return ProviderLocal
+	}
+}
+
+// HasProvider checks if the pool has any enabled accounts for the given provider.
+func (p *AccountPool) HasProvider(provider string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, a := range p.accounts {
+		if a.Enabled && (provider == "" || a.Provider == provider) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAccounts checks if any accounts are configured in the pool.
+func (p *AccountPool) HasAccounts() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.accounts) > 0
+}

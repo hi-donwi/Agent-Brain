@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/catalog"
 	"github.com/hi-donwi/Agent-Brain/internal/gateway"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
 	"github.com/spf13/cobra"
 )
@@ -111,6 +113,11 @@ to ~/.lokal/serve.token with mode 0600.`,
 				traceStore = trace.NewStore(layout.Traces)
 			}
 
+			// Load multi-account router configuration
+			routerPath := filepath.Join(layout.Root, "accounts.yaml")
+			routerCfg, _ := router.LoadRouterConfig(routerPath)
+			accountPool := router.NewAccountPool(routerCfg)
+
 			srv, err := gateway.NewServer(gateway.ServerConfig{
 				Addr:         addr,
 				Token:        token,
@@ -120,15 +127,23 @@ to ~/.lokal/serve.token with mode 0600.`,
 				UserConfig:   cfg,
 				TraceStore:   traceStore,
 				Version:      buildinfo.Version,
+				AccountPool:  accountPool,
+				TokenSaver:   routerCfg.TokenSaver,
 			})
 			if err != nil {
 				return fmt.Errorf("configure gateway server: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "lokal gateway starting on http://%s\n", addr)
-			fmt.Fprintf(cmd.OutOrStdout(), "Bearer token: %s (saved in %s)\n", token, layout.Token)
+			fmt.Fprintf(cmd.OutOrStdout(), "🧠 Agent-Brain gateway starting on http://%s\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "Bearer token:    %s (saved in %s)\n", token, layout.Token)
 			fmt.Fprintf(cmd.OutOrStdout(), "OpenAI endpoint: http://%s/v1\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "Anthropic route: http://%s/v1/messages\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "Gemini route:    http://%s/v1beta\n", addr)
 			fmt.Fprintf(cmd.OutOrStdout(), "Healthcheck:     http://%s/healthz\n", addr)
+			if accountPool != nil && accountPool.HasAccounts() {
+				fmt.Fprintf(cmd.OutOrStdout(), "AI Router:       ● ACTIVE (%d accounts, strategy: %s, token-saver: %v)\n",
+					len(accountPool.ListAccounts()), routerCfg.Strategy, routerCfg.TokenSaver)
+			}
 			if recordTraces {
 				fmt.Fprintf(cmd.OutOrStdout(), "Traces recorded: %s\n", layout.Traces)
 			}

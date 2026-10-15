@@ -16,6 +16,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/gateway"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
 	"github.com/hi-donwi/Agent-Brain/internal/residency"
+	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
@@ -846,5 +847,207 @@ func TestServer_TraceRecording(t *testing.T) {
 
 	if records[1].Response != "Streamed " || records[1].PromptTokens != 12 || records[1].EvalTokens != 18 {
 		t.Errorf("unexpected record 1: %+v", records[1])
+	}
+}
+
+func TestServer_AnthropicMessages_Router(t *testing.T) {
+	// Mock upstream Anthropic server
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "mock-anthropic-key" {
+			t.Errorf("unexpected x-api-key: %s", r.Header.Get("x-api-key"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"Hello from Anthropic Mock"}]}`))
+	}))
+	defer upstream.Close()
+
+	pool := router.NewAccountPool(router.RouterConfig{
+		Accounts: []router.Account{
+			{
+				ID:       "anthropic-test",
+				Provider: router.ProviderAnthropic,
+				APIKey:   "mock-anthropic-key",
+				BaseURL:  upstream.URL,
+				Tier:     router.TierSubscription,
+				Priority: 1,
+				Enabled:  true,
+				Status:   router.StatusActive,
+			},
+		},
+	})
+
+	token := "test-token"
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:        "127.0.0.1:0",
+		Token:       token,
+		AccountPool: pool,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	body := `{"model":"claude-3-7-sonnet-20250219","max_tokens":1024,"messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Hello from Anthropic Mock") {
+		t.Errorf("expected mock response, got: %s", rec.Body.String())
+	}
+}
+
+func TestServer_GeminiGenerateContent_Router(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
+			t.Errorf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"Hello from Gemini Mock"}]}}]}`))
+	}))
+	defer upstream.Close()
+
+	pool := router.NewAccountPool(router.RouterConfig{
+		Accounts: []router.Account{
+			{
+				ID:       "gemini-test",
+				Provider: router.ProviderGemini,
+				APIKey:   "mock-gemini-key",
+				BaseURL:  upstream.URL,
+				Tier:     router.TierSubscription,
+				Priority: 1,
+				Enabled:  true,
+				Status:   router.StatusActive,
+			},
+		},
+	})
+
+	token := "test-token"
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:        "127.0.0.1:0",
+		Token:       token,
+		AccountPool: pool,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/v1beta/models/gemini-1.5-pro:generateContent", strings.NewReader(`{"contents":[{"parts":[{"text":"Hi"}]}]}`))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Hello from Gemini Mock") {
+		t.Errorf("expected mock response, got: %s", rec.Body.String())
+	}
+}
+
+func TestServer_ChatCompletions_CloudProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","choices":[{"message":{"role":"assistant","content":"Hello from Cloud Proxy Mock"}}]}`))
+	}))
+	defer upstream.Close()
+
+	pool := router.NewAccountPool(router.RouterConfig{
+		Accounts: []router.Account{
+			{
+				ID:       "openai-test",
+				Provider: router.ProviderOpenAI,
+				APIKey:   "mock-openai-key",
+				BaseURL:  upstream.URL,
+				Tier:     router.TierSubscription,
+				Priority: 1,
+				Enabled:  true,
+				Status:   router.StatusActive,
+			},
+		},
+	})
+
+	token := "test-token"
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:        "127.0.0.1:0",
+		Token:       token,
+		AccountPool: pool,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Hello from Cloud Proxy Mock") {
+		t.Errorf("expected mock response, got: %s", rec.Body.String())
+	}
+}
+
+func TestServer_AccountsEndpoint(t *testing.T) {
+	pool := router.NewAccountPool(router.RouterConfig{
+		Accounts: []router.Account{
+			{
+				ID:       "acc-1",
+				Provider: "anthropic",
+				Tier:     router.TierSubscription,
+				Priority: 1,
+				Enabled:  true,
+				Status:   router.StatusActive,
+			},
+		},
+	})
+
+	token := "test-token"
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Addr:        "127.0.0.1:0",
+		Token:       token,
+		AccountPool: pool,
+	})
+	if err != nil {
+		t.Fatalf("NewServer failed: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/v1/accounts", nil)
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var accs []router.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &accs); err != nil {
+		t.Fatalf("parse accounts failed: %v", err)
+	}
+	if len(accs) != 1 || accs[0].ID != "acc-1" {
+		t.Errorf("unexpected accounts response: %+v", accs)
 	}
 }

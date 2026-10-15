@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/home"
 	"github.com/hi-donwi/Agent-Brain/internal/hw"
 	"github.com/hi-donwi/Agent-Brain/internal/residency"
+	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
@@ -34,6 +36,8 @@ type ServerConfig struct {
 	Residency    *residency.Manager
 	TraceStore   *trace.Store
 	Version      string
+	AccountPool  *router.AccountPool
+	TokenSaver   bool
 }
 
 // Server is the OpenAI-compatible loopback HTTP server.
@@ -41,6 +45,7 @@ type Server struct {
 	cfg        ServerConfig
 	httpServer *http.Server
 	listener   net.Listener
+	proxy      *router.ProxyHandler
 }
 
 // NewServer constructs the gateway server with security middleware and routes.
@@ -72,9 +77,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	mux := http.NewServeMux()
 	s := &Server{cfg: cfg}
 
+	if cfg.AccountPool != nil {
+		s.proxy = router.NewProxyHandler(cfg.AccountPool, cfg.TokenSaver)
+	}
+
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
+	mux.HandleFunc("GET /v1/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("POST /v1/messages", s.handleAnthropicMessages)
+	mux.HandleFunc("POST /v1beta/", s.handleGeminiGenerateContent)
 	mux.HandleFunc("POST /v1/tokens", s.handleTokens)
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 
@@ -138,6 +150,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"version": s.cfg.Version,
 		"profile": profile,
 	}
+	if s.cfg.AccountPool != nil {
+		data["accounts_count"] = len(s.cfg.AccountPool.ListAccounts())
+		data["token_saver"] = s.cfg.TokenSaver
+	}
 	if s.cfg.Residency != nil {
 		data["residency"] = s.cfg.Residency.Stats()
 	}
@@ -169,7 +185,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				ID:      role,
 				Object:  "model",
 				Created: now,
-				OwnedBy: "lokal",
+				OwnedBy: "brain",
 			})
 		}
 	} else {
@@ -178,7 +194,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				ID:      role,
 				Object:  "model",
 				Created: now,
-				OwnedBy: "lokal",
+				OwnedBy: "brain",
 			})
 		}
 	}
@@ -199,6 +215,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 					OwnedBy: s.cfg.Adapter.Name(),
 				})
 			}
+		}
+	}
+
+	// 3. Add accounts and supported cloud models from router pool
+	if s.cfg.AccountPool != nil {
+		for _, acc := range s.cfg.AccountPool.ListAccounts() {
+			models = append(models, openAIModel{
+				ID:      acc.Provider + "/" + acc.ID,
+				Object:  "model",
+				Created: now,
+				OwnedBy: acc.Provider,
+			})
 		}
 	}
 
@@ -309,8 +337,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		sessionID = "default"
 	}
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "bad_request")
+		return
+	}
+
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
 		return
 	}
@@ -322,6 +356,30 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.Messages) == 0 {
 		writeAPIError(w, http.StatusBadRequest, "messages array cannot be empty", "invalid_request_error", "bad_request")
+		return
+	}
+
+	// Check if this model should route to cloud provider via AI Router
+	provider := router.DetectProvider(req.Model)
+	shouldProxy := false
+	if s.proxy != nil {
+		if provider != router.ProviderLocal && s.cfg.AccountPool != nil && s.cfg.AccountPool.HasProvider(provider) {
+			shouldProxy = true
+		} else if s.cfg.Adapter == nil && s.cfg.AccountPool != nil && s.cfg.AccountPool.HasAccounts() {
+			shouldProxy = true
+			if provider == router.ProviderLocal {
+				provider = router.ProviderOpenAI
+			}
+		}
+	}
+
+	if shouldProxy {
+		resp, _, err := s.proxy.ForwardRequest(ctx, provider, "/v1/chat/completions", body, r.Header)
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("upstream router error for %s: %v", provider, err), "api_error", "upstream_error")
+			return
+		}
+		_ = router.StreamResponse(w, resp)
 		return
 	}
 
@@ -798,4 +856,60 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apiResp)
+}
+
+func (s *Server) handleAccounts(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.cfg.AccountPool == nil {
+		_ = json.NewEncoder(w).Encode([]router.Account{})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(s.cfg.AccountPool.ListAccounts())
+}
+
+func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
+	if s.proxy == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "no cloud router configured for anthropic", "api_error", "proxy_unavailable")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "bad_request")
+		return
+	}
+
+	resp, _, err := s.proxy.ForwardRequest(r.Context(), router.ProviderAnthropic, "/v1/messages", body, r.Header)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("anthropic router error: %v", err), "api_error", "upstream_error")
+		return
+	}
+
+	_ = router.StreamResponse(w, resp)
+}
+
+func (s *Server) handleGeminiGenerateContent(w http.ResponseWriter, r *http.Request) {
+	if s.proxy == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "no cloud router configured for gemini", "api_error", "proxy_unavailable")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error", "bad_request")
+		return
+	}
+
+	targetPath := r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetPath += "?" + r.URL.RawQuery
+	}
+
+	resp, _, err := s.proxy.ForwardRequest(r.Context(), router.ProviderGemini, targetPath, body, r.Header)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, fmt.Sprintf("gemini router error: %v", err), "api_error", "upstream_error")
+		return
+	}
+
+	_ = router.StreamResponse(w, resp)
 }

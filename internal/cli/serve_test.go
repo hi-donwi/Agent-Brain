@@ -60,7 +60,7 @@ func TestServeCmd_StartsAndShutsDown(t *testing.T) {
 	}
 
 	out := outBuf.String()
-	if !strings.Contains(out, "lokal gateway starting on http://127.0.0.1:52149") {
+	if !strings.Contains(out, "gateway starting on http://127.0.0.1:52149") {
 		t.Errorf("expected startup message, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Bearer token:") {
