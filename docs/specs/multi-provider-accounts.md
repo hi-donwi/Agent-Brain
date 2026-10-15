@@ -1,8 +1,16 @@
 # Multi-provider accounts and interactive onboarding
 
-Status: Approved for implementation on 2026-10-15. These commands describe the target behavior, not
-features already implemented. No authentication integration is accepted merely
+Status: Approved for implementation on 2026-10-15. This document defines target
+behavior; the account guide records delivered support. No authentication integration is accepted merely
 because a profile directory exists or a child process exits successfully.
+
+Implementation details and current capability limits are documented in
+[the account guide](../accounts.md) and [ADR-0011](../adr/0011-provider-accounts-and-cli-boundaries.md).
+The delivered OAuth integration uses a dedicated local v8 bridge per identity.
+Native Antigravity primary sign-in profiles, isolated Cursor browser profiles,
+and a direct registered Sign in with ChatGPT application flow remain gated;
+they are not presented as completed capabilities. Real user consent and
+deployment-specific identity verification are separate from fake-data contract tests.
 
 ## Objective and assumptions
 
