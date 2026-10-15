@@ -18,6 +18,14 @@ credential and checks model discovery, or verifies a native client session.
 `--probe --model MODEL` explicitly sends a minimal inference request and may
 incur usage. Native client readiness and gateway readiness are independent.
 
+Model IDs are discovered automatically after OAuth login and when a newly added
+API/local account has an available credential. The wizard does not require model
+IDs. List cached discovery results with `brain accounts models provider/name`, or
+fetch them again with `brain accounts models provider/name --refresh` (`--json`
+is available). Explicit `--models` restrictions remain in place during refresh.
+Catalog entries describe models exposed for that credential; a listing does not
+prove remaining quota or successful inference for every model.
+
 Use canonical references such as `openai/work`. Short names are accepted only
 when unambiguous. Existing account IDs remain valid. Repeated provider/name
 creation fails, and names cannot contain filesystem traversal components.
@@ -43,12 +51,61 @@ as a generic third-party inference credential.
 
 ## Antigravity and Codex OAuth gateway connections
 
-The OAuth adapter targets CLIProxyAPI's **management API v8**, separately
-installed and operated on loopback. It is an optional third-party integration.
-Brain does not install it, reuse an existing native keyring session, or copy its
-OAuth tokens. The bridge owns authentication and token renewal.
+Antigravity and Codex OAuth gateway connections use a private CLIProxyAPI v8
+bridge per identity. Automatic setup is the default:
 
-Each account requires a dedicated bridge instance with:
+```sh
+brain accounts add antigravity --name work
+brain accounts add antigravity --name personal
+brain accounts add codex --auth oauth --name work
+```
+
+In the interactive wizard, choose the provider, authentication method and account
+name. Brain generates separate local inference/management credentials, chooses
+an unused loopback port, and prepares an independent private auth directory.
+There are no bridge URL, environment-key or model-ID prompts in this path.
+Brain opens the browser or prints the login URL with `--no-browser`; the user
+completes the provider's consent. After login, Brain verifies the bound identity,
+queries `/credentials/models?name=<bound-id>`, saves and displays the model IDs.
+It never substitutes a general provider catalog for that credential's catalog.
+
+The first use downloads **CLIProxyAPI v8.0.29** from its official GitHub release
+into the Brain runtime home (about 24 MB). Platform-specific SHA256 digests are
+pinned in the installer, checked before extraction, and checked again when using
+the cached archive. The executable is compared with that verified archive on
+reuse. No package manager or administrator access is needed. Supported targets
+are macOS/Linux/Windows on amd64 and arm64; Linux uses the portable no-plugin
+build. Files stay under `tools/cliproxyapi/` and `bridges/` inside the runtime home.
+An initial offline setup can use the external-bridge option below.
+
+`brain serve` starts and owns the enabled managed bridges, and stops its processes
+when the gateway shuts down. Login, test, model refresh and `cli --direct` borrow
+a matching running bridge or own a temporary process for their command. Each
+managed bridge has an OS process lock, an independent auth directory, disabled
+plugins/control panel/network discovery, and an environment that omits provider,
+storage and management credentials from the parent shell. Ports and secrets are
+local transport details; the bridge still owns OAuth tokens and their renewal.
+Brain does not import an existing native CLI keyring session.
+
+If an earlier onboarding attempt saved an incomplete external account, rerun
+`brain accounts add` with the same provider/name to resume automatically. To
+explicitly convert an existing external connection, use:
+
+```sh
+brain accounts login antigravity/work --managed-bridge
+brain accounts models antigravity/work --refresh
+```
+
+Conversion retains the Brain account ID and leaves the external bridge and its
+credentials untouched. `--no-login` prepares the account without downloading or
+starting a bridge. It can be connected with `accounts login` later.
+
+### Advanced: an externally operated bridge
+
+Use `--external-bridge` when the operator already runs CLIProxyAPI v8 and wants
+to retain control of its processes and credentials. Brain never starts or stops
+that external service. Each external account requires a dedicated instance with:
+
 
 - A separate port and auth directory.
 - Exactly one ready OAuth credential for the selected provider after login.
@@ -84,7 +141,7 @@ Set `BRAIN_BRIDGE_WORK_KEY` and `BRAIN_BRIDGE_WORK_MANAGEMENT_KEY` to the matchi
 local secrets, then connect:
 
 ```sh
-brain accounts add antigravity --auth oauth --name work \
+brain accounts add antigravity --external-bridge --auth oauth --name work \
   --base-url http://127.0.0.1:8317 \
   --bridge-url http://127.0.0.1:8317/v8/management \
   --key env:BRAIN_BRIDGE_WORK_KEY \
@@ -96,8 +153,8 @@ state, prints it, and optionally opens a browser. It polls the same login state,
 then verifies the sole credential's provider/identity and model discovery.
 Cancellation attempts to cancel that pending bridge OAuth session.
 
-Repeat with another dedicated instance, port, auth directory, keys, and account
-name for a second identity. The adapter also accepts the `codex` provider. A
+Repeat with another dedicated external instance, port, auth directory, keys, and
+account name for a second identity. The adapter also accepts the `codex` provider. A
 separate official Sign in with ChatGPT application integration is not enabled
 without application registration and client configuration.
 
@@ -146,6 +203,10 @@ and `accounts remove` change Brain configuration; they do not revoke provider
 credentials or delete native client sessions. Log out through the official
 client or the external bridge to clear those sessions.
 
+Cached discovery metadata is separate from an explicitly restricted routing
+model list. A refresh updates automatically discovered routing lists while
+preserving explicit or legacy model restrictions.
+
 Metadata is in `accounts.yaml`; new literal credentials live separately in
 `secrets/`. Directories use mode 0700 and files mode 0600 where the OS implements
 those permissions. Windows relies on the runtime directory's inherited access
@@ -169,4 +230,5 @@ Malformed configuration fails gateway startup instead of becoming an empty pool.
 - [Codex provider configuration](https://learn.chatgpt.com/docs/config-file/config-reference)
 - [Cursor browser and API-key login](https://cursor.com/docs/cli/reference/authentication)
 - [OpenCode provider configuration](https://opencode.ai/docs/providers/)
+- [CLIProxyAPI pinned release](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.29)
 - [CLIProxyAPI management API v8](https://help.router-for.me/management/apiv8)

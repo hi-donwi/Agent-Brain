@@ -7,6 +7,12 @@ because a profile directory exists or a child process exits successfully.
 Implementation details and current capability limits are documented in
 [the account guide](../accounts.md) and [ADR-0011](../adr/0011-provider-accounts-and-cli-boundaries.md).
 The delivered OAuth integration uses a dedicated local v8 bridge per identity.
+The user-requested onboarding refinement makes that bridge managed by default:
+prepare a private pinned executable, port and separate local keys automatically;
+retain explicit external mode. Recover an incomplete earlier binding without
+changing its account ID. Discover models through the bound credential's API after
+login and offer `accounts models --refresh`; do not require manual model IDs or
+expand explicit model restrictions during refresh. See ADR-0012.
 Native Antigravity primary sign-in profiles, isolated Cursor browser profiles,
 and a direct registered Sign in with ChatGPT application flow remain gated;
 they are not presented as completed capabilities. Real user consent and

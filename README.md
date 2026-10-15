@@ -111,11 +111,11 @@ and account protocols are rejected before launching.
 | Integration | Account connection | Gateway behavior |
 |---|---|---|
 | Google AI Studio | Multiple API-key accounts | Gemini and OpenAI-compatible chat/embeddings |
-| Antigravity | OAuth through a dedicated local CLIProxyAPI v8 instance per account | Separate Antigravity inference source; requires the external bridge |
+| Antigravity | OAuth through a dedicated local CLIProxyAPI v8 instance per account | Separate Antigravity inference source; private bridge prepared automatically |
 | Anthropic API | Multiple API-key accounts | Anthropic Messages |
 | Claude Code subscription | Official `claude auth login` in separate profiles | Native CLI use; subscription credentials stay in the official client |
 | OpenAI API | Multiple API-key accounts | Chat, Responses, and embeddings |
-| Codex / ChatGPT | Official native login/device flow, or a configured OAuth bridge | Native login and gateway credentials are separate connections |
+| Codex / ChatGPT | Official native login/device flow, or automatic private OAuth bridge | Native login and gateway credentials are separate connections |
 | Cursor | Multiple Cursor user API keys; browser login for its default native session | Native Cursor client; no general Cursor model endpoint is assumed |
 | OpenCode | Client configuration for an underlying account; explicit service endpoint support | Uses the selected provider/protocol |
 | DeepSeek / OpenRouter | Multiple API-key accounts | Compatible chat API |
@@ -138,7 +138,18 @@ Antigravity and AI Studio remain distinct even when both expose Gemini models.
 Routed `agy` use requires its documented `modelProvider: "gemini"` client setting;
 the selected Brain account determines the upstream service. Brain does not alter
 global Antigravity settings or claim independent native Google keyring profiles.
-See the [account guide](docs/accounts.md) for the bridge setup and limitations.
+OAuth setup automatically prepares the private bridge, local port and credentials;
+complete the browser login to discover the account's models. No bridge URL or model
+ID entry is needed in the default wizard.
+
+```sh
+./bin/brain accounts add antigravity --name work
+./bin/brain accounts models antigravity/work --refresh
+```
+
+For an incomplete account from an earlier setup, rerun the wizard with the same
+provider/name, or run `accounts login antigravity/work --managed-bridge`.
+See the [account guide](docs/accounts.md) for automatic and external bridge modes.
 
 ## Other commands and verification
 
