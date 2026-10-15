@@ -101,6 +101,13 @@ name for a second identity. The adapter also accepts the `codex` provider. A
 separate official Sign in with ChatGPT application integration is not enabled
 without application registration and client configuration.
 
+For an SSH deployment, URL-only login still needs a route for the browser's
+OAuth callback. Forward the callback port shown in the authorization URL as
+well as any bridge port accessed from the local machine. Antigravity's bridge
+callback uses port 51121; for example, establish
+`ssh -L 51121:127.0.0.1:51121 user@server` before completing that browser flow.
+Keep the tunnel open until login verification finishes.
+
 ```sh
 brain accounts test antigravity/work
 brain serve --cloud-only
