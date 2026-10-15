@@ -36,7 +36,20 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 				return
 			}
 
+			r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
 			auth := r.Header.Get("Authorization")
+			if auth == "" {
+				key := r.Header.Get("x-api-key")
+				if key == "" {
+					key = r.Header.Get("x-goog-api-key")
+				}
+				if key == "" && strings.HasPrefix(r.URL.Path, "/v1beta/") {
+					key = r.URL.Query().Get("key")
+				}
+				if key != "" {
+					auth = "Bearer " + key
+				}
+			}
 			if auth == "" {
 				writeAPIError(w, http.StatusUnauthorized, "missing Authorization header", "invalid_request_error", "unauthorized")
 				return
@@ -49,7 +62,21 @@ func AuthMiddleware(expectedToken string) func(http.Handler) http.Handler {
 			}
 
 			token := strings.TrimSpace(parts[1])
+			if expectedToken == "" {
+				writeAPIError(w, 401, "gateway authentication is not configured", "invalid_request_error", "unauthorized")
+				return
+			}
 			if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+				id, valid := tokenAccount(expectedToken, token)
+				if valid {
+					if selector := r.Header.Get("X-Brain-Account"); selector != "" && selector != id {
+						writeAPIError(w, 403, "account token cannot change its scope", "invalid_request_error", "account_scope")
+						return
+					}
+					r = r.WithContext(withAccountScope(r.Context(), id))
+					next.ServeHTTP(w, r)
+					return
+				}
 				writeAPIError(w, http.StatusUnauthorized, "invalid bearer token", "invalid_request_error", "unauthorized")
 				return
 			}
