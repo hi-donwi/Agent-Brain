@@ -32,6 +32,7 @@ backends, indexes code and files with hybrid retrieval (RAG), and serves knowled
 	root.AddCommand(newServeCmd(defaultServeDeps()))
 	root.AddCommand(newServiceCmd())
 	root.AddCommand(newAccountsCmd())
+	root.AddCommand(newProvidersCmd())
 	root.AddCommand(newRouterCmd())
 	root.AddCommand(newCliCmd())
 	root.AddCommand(newIndexCmd(defaultRagDeps()))

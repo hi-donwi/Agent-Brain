@@ -9,30 +9,34 @@ import (
 )
 
 func TestGetToolProfileEnv(t *testing.T) {
-	dir := "/tmp/test-profile"
-	env := getToolProfileEnv("agy", "donwidev", dir)
-
-	expectedKeys := []string{
-		"CLAUDE_CONFIG_DIR=/tmp/test-profile",
-		"ANTIGRAVITY_CONFIG_DIR=/tmp/test-profile",
-		"CODEX_CONFIG_DIR=/tmp/test-profile",
-		"OPENCODE_CONFIG_DIR=/tmp/test-profile",
-		"AIDER_CONFIG_DIR=/tmp/test-profile",
-		"XDG_CONFIG_HOME=/tmp/test-profile",
-		"AGY_ACCOUNT=donwidev",
+	dir := t.TempDir()
+	if got := getToolProfileEnv("agy", "work", dir); len(got) != 0 {
+		t.Fatal("unverified Antigravity profile variables injected")
 	}
+	if got := getToolProfileEnv("codex", "work", dir); len(got) != 1 || got[0] != "CODEX_HOME="+dir {
+		t.Fatalf("Codex profile variables: %v", got)
+	}
+	if got := getToolProfileEnv("claude", "work", dir); len(got) != 1 || got[0] != "CLAUDE_CONFIG_DIR="+dir {
+		t.Fatalf("Claude profile variables: %v", got)
+	}
+}
 
-	for _, k := range expectedKeys {
-		found := false
-		for _, e := range env {
-			if e == k {
-				found = true
-				break
-			}
+func TestParseCLIArgsPreservesToolDelimiter(t *testing.T) {
+	got, err := parseCLIArgs([]string{"--account", "openai/work", "codex", "--", "--account", "tool-account", "--direct"})
+	if err != nil || got.account != "openai/work" || got.direct || strings.Join(got.args, " ") != "--account tool-account --direct" {
+		t.Fatalf("bad parser result: %+v %v", got, err)
+	}
+	for _, args := range [][]string{{"--account"}, {"--port", "bad", "codex"}, {"--unknown", "codex"}} {
+		if _, err := parseCLIArgs(args); err == nil {
+			t.Fatalf("invalid flags accepted: %v", args)
 		}
-		if !found {
-			t.Errorf("expected env %q in profile env list", k)
-		}
+	}
+}
+
+func TestMergeEnvironmentRemovesInheritedCredential(t *testing.T) {
+	got := mergeProcessEnv([]string{"OPENAI_API_KEY=old", "PATH=test", "openai_api_key=other"}, []string{"OPENAI_API_KEY=scoped"}, "OPENAI_API_KEY")
+	if strings.Count(strings.ToUpper(strings.Join(got, "\n")), "OPENAI_API_KEY=") != 1 || !strings.Contains(strings.Join(got, "\n"), "OPENAI_API_KEY=scoped") {
+		t.Fatalf("duplicate or inherited credential: %v", got)
 	}
 }
 

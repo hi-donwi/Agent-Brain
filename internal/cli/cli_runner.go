@@ -1,237 +1,244 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/hi-donwi/Agent-Brain/internal/gateway"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/spf13/cobra"
 )
 
-func newCliCmd() *cobra.Command {
-	var port int
-
-	cmd := &cobra.Command{
-		Use:   "cli [--account <name>] [--direct] <tool> [args...]",
-		Short: "Launch a coding agent CLI connected to AI Router with multi-account support",
-		Long: `cli launches coding tools (claude, codex, agy, opencode, aider) with their
-environment variables pre-configured to route through the Brain AI Gateway.
-
-Features:
-- Multi-Account CLI Profiles: Isolate OAuth/browser logins per account (e.g. work vs personal)
-- AI Router Integration: Multi-account round-robin, priority tiering, and 429 auto-failover
-- Token Saver (RTK): Real-time token compression on tool execution outputs
-
-Subcommands & Examples:
-  brain cli claude                          # Run claude routed through Brain gateway
-  brain cli --account work claude           # Run claude using 'work' profile
-  brain cli login claude --account work     # Login to claude under 'work' profile
-  brain cli login agy --account google-dev  # Login to antigravity CLI under 'google-dev'
-  brain cli profiles                        # List all saved CLI profiles
-  brain cli codex --model gpt-4o            # Run codex CLI through router
-  brain cli opencode                        # Run opencode CLI through router`,
-		DisableFlagParsing: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return cmd.Help()
-			}
-
-			l, err := home.Default()
-			if err != nil {
-				return fmt.Errorf("resolve home directory: %w", err)
-			}
-			profilesBaseDir := filepath.Join(l.Root, "profiles")
-
-			// Check for 'profiles' subcommand
-			if args[0] == "profiles" || args[0] == "list-profiles" {
-				return runListProfiles(profilesBaseDir)
-			}
-
-			var (
-				account string
-				direct  bool
-				isLogin bool
-				tool    string
-				rawArgs []string
-			)
-
-			// Parse brain cli flags before tool name
-			for i := 0; i < len(args); i++ {
-				arg := args[i]
-				switch {
-				case arg == "--account" || arg == "-a":
-					if i+1 < len(args) {
-						account = args[i+1]
-						i++
-					}
-				case strings.HasPrefix(arg, "--account="):
-					account = strings.TrimPrefix(arg, "--account=")
-				case arg == "--direct":
-					direct = true
-				case arg == "--port":
-					if i+1 < len(args) {
-						_, _ = fmt.Sscanf(args[i+1], "%d", &port)
-						i++
-					}
-				case arg == "login":
-					isLogin = true
-				case !strings.HasPrefix(arg, "-"):
-					if tool == "" {
-						tool = arg
-						rawArgs = args[i+1:]
-						goto Parsed
-					}
-				}
-			}
-
-		Parsed:
-			if tool == "" {
-				return fmt.Errorf("please specify a CLI tool to run (e.g. brain cli claude, brain cli login agy)")
-			}
-
-			// Also filter out any trailing --account flags passed after the tool
-			var toolArgs []string
-			for j := 0; j < len(rawArgs); j++ {
-				arg := rawArgs[j]
-				if (arg == "--account" || arg == "-a") && j+1 < len(rawArgs) {
-					account = rawArgs[j+1]
-					j++
-					continue
-				} else if strings.HasPrefix(arg, "--account=") {
-					account = strings.TrimPrefix(arg, "--account=")
-					continue
-				}
-				toolArgs = append(toolArgs, arg)
-			}
-
-			if port <= 0 {
-				port = gateway.DefaultPort
-			}
-
-			targetPath, err := exec.LookPath(tool)
-			if err != nil {
-				return fmt.Errorf("tool %q not found on PATH: please install it first", tool)
-			}
-
-			// Handle interactive tool login with profile isolation
-			if isLogin {
-				if account == "" {
-					account = "default"
-				}
-				profileDir := filepath.Join(profilesBaseDir, tool, account)
-				if err := os.MkdirAll(profileDir, 0o700); err != nil {
-					return fmt.Errorf("create profile directory: %w", err)
-				}
-
-				loginArgs := toolArgs
-				if len(loginArgs) == 0 {
-					switch tool {
-					case "agy", "antigravity":
-						loginArgs = []string{} // agy launches interactive session directly
-					case "opencode":
-						loginArgs = []string{"auth", "login"}
-					default:
-						loginArgs = []string{"login"}
-					}
-				}
-
-				loginCmd := exec.Command(targetPath, loginArgs...)
-				loginCmd.Stdin = os.Stdin
-				loginCmd.Stdout = os.Stdout
-				loginCmd.Stderr = os.Stderr
-				loginCmd.Env = append(os.Environ(), getToolProfileEnv(tool, account, profileDir)...)
-
-				fmt.Printf("🔐 [Agent-Brain] Launching %s login under profile %q (%s)\n", tool, account, profileDir)
-				return loginCmd.Run()
-			}
-
-			// Regular tool invocation
-			childCmd := exec.Command(targetPath, toolArgs...)
-			childCmd.Stdin = os.Stdin
-			childCmd.Stdout = os.Stdout
-			childCmd.Stderr = os.Stderr
-
-			childEnv := os.Environ()
-
-			// Apply profile isolation if account is provided
-			if account != "" {
-				profileDir := filepath.Join(profilesBaseDir, tool, account)
-				if err := os.MkdirAll(profileDir, 0o700); err != nil {
-					return fmt.Errorf("create profile directory: %w", err)
-				}
-				childEnv = append(childEnv, getToolProfileEnv(tool, account, profileDir)...)
-				fmt.Fprintf(os.Stderr, "👤 [Agent-Brain] Active CLI Profile: %s (%s)\n", account, profileDir)
-			}
-
-			// Wire up Brain Gateway proxy URLs unless --direct is requested
-			if !direct {
-				token := ""
-				tokenPath := filepath.Join(l.Root, "serve.token")
-				if data, err := os.ReadFile(tokenPath); err == nil {
-					token = strings.TrimSpace(string(data))
-				}
-				if token == "" {
-					token = "brain-local-dev-token"
-				}
-
-				baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-				openAIBase := fmt.Sprintf("http://127.0.0.1:%d/v1", port)
-
-				// Probe gateway status
-				healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
-				httpClient := &http.Client{Timeout: 300 * time.Millisecond}
-				resp, err := httpClient.Get(healthURL)
-				gatewayOnline := err == nil && resp.StatusCode == http.StatusOK
-				if resp != nil && resp.Body != nil {
-					_ = resp.Body.Close()
-				}
-
-				if gatewayOnline {
-					injected := []string{
-						"ANTHROPIC_BASE_URL=" + baseURL,
-						"ANTHROPIC_API_KEY=" + token,
-						"OPENAI_BASE_URL=" + openAIBase,
-						"OPENAI_API_BASE=" + openAIBase,
-						"OPENAI_API_KEY=" + token,
-						"GEMINI_API_BASE=" + baseURL,
-						"GOOGLE_GEMINI_BASE_URL=" + baseURL,
-						"GEMINI_API_KEY=" + token,
-					}
-					childEnv = append(childEnv, injected...)
-					fmt.Fprintf(os.Stderr, "🧠 [Agent-Brain] Router Gateway: ● CONNECTED (127.0.0.1:%d | Multi-Account & Token-Saver active)\n", port)
-				} else {
-					fmt.Fprintf(os.Stderr, "ℹ️  [Agent-Brain] Router Gateway: ○ OFFLINE (start 'brain serve' to enable 429 failover). Running in direct account mode...\n")
-				}
-			}
-
-			childCmd.Env = childEnv
-			return childCmd.Run()
-		},
-	}
-
-	return cmd
+type cliOptions struct {
+	tool, account string
+	args          []string
+	direct, login bool
+	port          int
 }
 
-func getToolProfileEnv(tool, account, profileDir string) []string {
-	env := []string{
-		"CLAUDE_CONFIG_DIR=" + profileDir,
-		"ANTIGRAVITY_CONFIG_DIR=" + profileDir,
-		"CODEX_CONFIG_DIR=" + profileDir,
-		"OPENCODE_CONFIG_DIR=" + profileDir,
-		"AIDER_CONFIG_DIR=" + profileDir,
-		"XDG_CONFIG_HOME=" + profileDir,
+func parseCLIArgs(args []string) (cliOptions, error) {
+	o := cliOptions{port: gateway.DefaultPort}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			o.args = append(o.args, args[i+1:]...)
+			break
+		}
+		switch {
+		case arg == "--account" || arg == "-a":
+			if i+1 == len(args) || strings.HasPrefix(args[i+1], "-") {
+				return o, fmt.Errorf("--account requires provider/name")
+			}
+			i++
+			o.account = args[i]
+		case strings.HasPrefix(arg, "--account="):
+			o.account = strings.TrimPrefix(arg, "--account=")
+			if o.account == "" {
+				return o, fmt.Errorf("--account requires provider/name")
+			}
+		case arg == "--direct":
+			o.direct = true
+		case arg == "--port":
+			if i+1 == len(args) {
+				return o, fmt.Errorf("--port requires a number")
+			}
+			i++
+			value, err := strconv.Atoi(args[i])
+			if err != nil || value < 1 || value > 65535 {
+				return o, fmt.Errorf("port must be between 1 and 65535")
+			}
+			o.port = value
+		case arg == "login" && o.tool == "":
+			o.login = true
+		case o.tool == "" && !strings.HasPrefix(arg, "-"):
+			o.tool = arg
+		case o.tool == "":
+			return o, fmt.Errorf("unknown launcher option %q", arg)
+		default:
+			o.args = append(o.args, arg)
+		}
 	}
-	if account != "" {
-		env = append(env, "AGY_ACCOUNT="+account)
+	if o.tool == "" {
+		return o, fmt.Errorf("specify a CLI tool: claude, codex, agy, opencode, aider, cursor")
 	}
-	return env
+	return o, nil
+}
+
+func canonicalTool(name string) (string, error) {
+	switch name {
+	case "antigravity", "agy":
+		return "agy", nil
+	case "cursor", "cursor-agent":
+		return "cursor-agent", nil
+	case "claude", "codex", "opencode", "aider":
+		return name, nil
+	}
+	return "", fmt.Errorf("unsupported CLI tool %q; the generic executable name agent is intentionally not assumed to be Cursor", name)
+}
+
+func newCliCmd() *cobra.Command {
+	return &cobra.Command{Use: "cli [--account provider/name] [--direct] <tool> [args...]", Short: "Launch a native session or a selected provider account", Long: `Launch claude, codex, agy, opencode, aider, or cursor.
+Use --account to select a registered account. Native subscription accounts keep their
+own login. Gateway accounts require brain serve unless --direct is supplied.
+Use -- before tool arguments that share names with Brain launcher flags.`, DisableFlagParsing: true, RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+			return cmd.Help()
+		}
+		if args[0] == "profiles" || args[0] == "list-profiles" {
+			list := newAccountsListCmd()
+			list.SetOut(cmd.OutOrStdout())
+			list.SetErr(cmd.ErrOrStderr())
+			list.SetArgs(nil)
+			return list.ExecuteContext(cmd.Context())
+		}
+		options, err := parseCLIArgs(args)
+		if err != nil {
+			return err
+		}
+		tool, err := canonicalTool(options.tool)
+		if err != nil {
+			return err
+		}
+		layout, err := home.Default()
+		if err != nil {
+			return err
+		}
+		service := router.AccountService{Path: filepath.Join(layout.Root, "accounts.yaml")}
+		var account router.Account
+		selected := options.account != ""
+		if options.login {
+			provider := ""
+			switch tool {
+			case "claude":
+				provider = router.ProviderClaudeCode
+			case "codex":
+				provider = router.ProviderCodex
+			case "cursor-agent":
+				provider = "cursor"
+			default:
+				return fmt.Errorf("use brain accounts add to select an authentication integration for %s", tool)
+			}
+			ref := options.account
+			if ref == "" {
+				ref = provider + "/default"
+			}
+			account, err = service.Find(ref)
+			if err != nil {
+				if _, _, found := strings.Cut(ref, "/"); !found {
+					ref = provider + "/" + ref
+				}
+				prefix, name, _ := strings.Cut(ref, "/")
+				if prefix != provider {
+					return fmt.Errorf("native login provider does not match the selected tool")
+				}
+				account, err = service.Add(cmd.Context(), router.Account{Provider: provider, Name: name, Auth: router.AuthNative})
+				if err != nil {
+					return err
+				}
+			}
+			return connectAccount(cmd, AccountDeps{}, service, account, false)
+		}
+		if selected {
+			account, err = service.Find(options.account)
+			if err != nil {
+				return err
+			}
+		} else {
+			cfg, err := router.LoadRouterConfig(service.Path)
+			if err != nil {
+				return err
+			}
+			var candidates []router.Account
+			for _, a := range cfg.Accounts {
+				if cfg.Defaults[a.Provider] != a.ID {
+					continue
+				}
+				p, _ := router.LookupProvider(a.Provider)
+				if a.Auth == router.AuthNative && p.Tool == tool {
+					candidates = []router.Account{a}
+					break
+				}
+				if (tool == "opencode" && (a.Supports(router.ProtocolChat) || a.Supports(router.ProtocolMessages))) || (tool == "codex" && a.Supports(router.ProtocolResponses)) || (tool == "claude" && a.Supports(router.ProtocolMessages)) || (tool == "aider" && a.Supports(router.ProtocolChat)) || (tool == "agy" && a.Supports(router.ProtocolGemini)) || (tool == "cursor-agent" && a.Provider == "cursor") {
+					candidates = append(candidates, a)
+				}
+			}
+			if len(candidates) > 1 {
+				return fmt.Errorf("several provider defaults match this tool; specify --account provider/name")
+			}
+			if len(candidates) == 1 {
+				account = candidates[0]
+				selected = true
+			}
+		}
+		target, err := exec.LookPath(tool)
+		if err != nil {
+			return fmt.Errorf("install the official %s CLI first", tool)
+		}
+		if tool == "cursor-agent" {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
+			defer cancel()
+			data, err := exec.CommandContext(ctx, target, "login", "--help").CombinedOutput()
+			if err != nil || !strings.Contains(string(data), "Cursor") {
+				return fmt.Errorf("executable could not be verified as the Cursor CLI")
+			}
+		}
+		child := exec.CommandContext(cmd.Context(), target, options.args...)
+		child.Stdin = cmd.InOrStdin()
+		child.Stdout = cmd.OutOrStdout()
+		child.Stderr = cmd.ErrOrStderr()
+		if !selected {
+			child.Env = os.Environ()
+			fmt.Fprintln(cmd.ErrOrStderr(), "Native CLI session; no Brain account selected.")
+			return child.Run()
+		}
+		if !account.Enabled {
+			return fmt.Errorf("selected account is disabled")
+		}
+		if account.Auth == router.AuthOAuth {
+			if !account.GatewayReady {
+				return fmt.Errorf("OAuth account is not ready; run accounts login or accounts test")
+			}
+			bridge := router.BridgeClient{URL: account.BridgeURL, Key: account.BridgeKey}
+			if _, err := bridge.Verify(cmd.Context(), account.Provider, account.BridgeCredential); err != nil {
+				return err
+			}
+		}
+		url := fmt.Sprintf("http://127.0.0.1:%d", options.port)
+		token := ""
+		if account.Auth != router.AuthNative && tool != "cursor-agent" && !options.direct {
+			client := &http.Client{Timeout: time.Second}
+			response, err := client.Get(url + "/healthz")
+			if err != nil {
+				return fmt.Errorf("Brain gateway is offline; start brain serve or explicitly use --direct")
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != 200 {
+				return fmt.Errorf("Brain gateway health check failed")
+			}
+			data, err := os.ReadFile(layout.Token)
+			if err != nil || strings.TrimSpace(string(data)) == "" {
+				return fmt.Errorf("gateway token is unavailable; start brain serve")
+			}
+			token = gateway.ScopedToken(strings.TrimSpace(string(data)), account.ID)
+		}
+		plan, err := buildLaunchPlan(tool, account, layout.Root, url, token, options.direct, options.args)
+		if err != nil {
+			return err
+		}
+		child.Args = append([]string{target}, plan.Args...)
+		child.Env = plan.Env
+		fmt.Fprintf(cmd.ErrOrStderr(), "Account: %s; native=%t; direct=%t\n", account.Reference(), account.Auth == router.AuthNative, options.direct || tool == "cursor-agent")
+		return child.Run()
+	}}
 }
 
 func runListProfiles(profilesBaseDir string) error {

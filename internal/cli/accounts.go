@@ -3,15 +3,20 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/hi-donwi/Agent-Brain/internal/home"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/spf13/cobra"
 )
+
+type AccountDeps struct {
+	Interactive func() bool
+	Login       func(*cobra.Command, router.Account, bool) (router.Account, error)
+}
 
 func accountsConfigPath() (string, error) {
 	l, err := home.Default()
@@ -20,211 +25,215 @@ func accountsConfigPath() (string, error) {
 	}
 	return filepath.Join(l.Root, "accounts.yaml"), nil
 }
+func accountService() (router.AccountService, error) {
+	path, err := accountsConfigPath()
+	return router.AccountService{Path: path}, err
+}
 
-func newAccountsCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "accounts",
-		Aliases: []string{"acc", "account"},
-		Short:   "Manage multi-account CLI and cloud AI provider identities",
-		Long: `accounts configures, lists, and tests provider accounts (Anthropic, OpenAI,
-Gemini, DeepSeek, OpenRouter) used by the AI Router for load-balancing and auto-failover.`,
+func newAccountsCmd() *cobra.Command { return newAccountsCmdWithDeps(AccountDeps{}) }
+func newAccountsCmdWithDeps(deps AccountDeps) *cobra.Command {
+	cmd := &cobra.Command{Use: "accounts", Aliases: []string{"acc", "account"}, Short: "Manage provider accounts, native login, and gateway credentials"}
+	cmd.AddCommand(newAccountsListCmd(), newAccountsAddCmdWithDeps(deps), newAccountsRemoveCmd(), newAccountUseCmd(), newAccountLoginCmd(deps), newAccountTestCmd())
+	for _, enabled := range []bool{true, false} {
+		cmd.AddCommand(newAccountEnabledCmd(enabled))
 	}
-
-	cmd.AddCommand(newAccountsListCmd())
-	cmd.AddCommand(newAccountsAddCmd())
-	cmd.AddCommand(newAccountsRemoveCmd())
 	return cmd
 }
 
 func newAccountsListCmd() *cobra.Command {
 	var jsonOutput bool
-
-	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all configured accounts and their statuses",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := accountsConfigPath()
-			if err != nil {
-				return err
+	var provider string
+	cmd := &cobra.Command{Use: "list", Short: "List redacted account metadata (restart a running gateway after changes)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		path, err := accountsConfigPath()
+		if err != nil {
+			return err
+		}
+		cfg, err := router.LoadRouterConfig(path)
+		if err != nil {
+			return err
+		}
+		accounts := make([]router.Account, 0, len(cfg.Accounts))
+		for _, a := range cfg.Accounts {
+			if provider == "" || a.Provider == router.NormalizeProvider(provider) {
+				accounts = append(accounts, a)
 			}
-
-			cfg, err := router.LoadRouterConfig(path)
-			if err != nil {
-				return err
+		}
+		if jsonOutput {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(accounts)
+		}
+		if len(accounts) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "No accounts configured. Run: brain accounts add")
+			return err
+		}
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ACCOUNT\tAUTH\tSTATUS\tCLI\tGATEWAY\tDEFAULT")
+		for _, a := range accounts {
+			auth := a.Auth
+			if auth == "" {
+				auth = router.AuthAPIKey
 			}
-
-			if jsonOutput {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(cfg.Accounts)
+			status := a.Status
+			if status == "" {
+				status = router.StatusConfigured
 			}
-
-			if len(cfg.Accounts) == 0 {
-				fmt.Println("No accounts configured yet. Add one with: brain accounts add <provider> --name <id> --key <api-key>")
-				return nil
+			if !a.Enabled {
+				status = router.StatusDisabled
 			}
-
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-			_, _ = fmt.Fprintln(w, "ID\tPROVIDER\tTIER\tPRIORITY\tSTATUS\tKEY REF")
-			for _, a := range cfg.Accounts {
-				keyDisplay := a.APIKey
-				if len(keyDisplay) > 12 && !isEnvRef(keyDisplay) {
-					keyDisplay = keyDisplay[:6] + "..." + keyDisplay[len(keyDisplay)-4:]
-				}
-				status := a.Status
-				if status == "" {
-					status = router.StatusActive
-				}
-				if status == router.StatusRateLimited && !a.Cooldown.IsZero() {
-					remaining := time.Until(a.Cooldown).Round(time.Second)
-					if remaining > 0 {
-						status = router.AccountStatus(fmt.Sprintf("rate_limited(%s)", remaining))
-					}
-				}
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
-					a.ID, a.Provider, a.Tier, a.Priority, status, keyDisplay)
-			}
-			return w.Flush()
-		},
-	}
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+			fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%t\t%t\n", a.Reference(), auth, status, a.CLIReady, a.GatewayReady, cfg.Defaults[a.Provider] == a.ID)
+		}
+		return w.Flush()
+	}}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print metadata without secrets")
+	cmd.Flags().StringVar(&provider, "provider", "", "Filter provider")
 	return cmd
 }
 
-func newAccountsAddCmd() *cobra.Command {
-	var (
-		name     string
-		apiKey   string
-		tier     string
-		priority int
-		baseURL  string
-	)
-
-	cmd := &cobra.Command{
-		Use:   "add <provider>",
-		Short: "Add or update a provider account",
-		Example: `  brain accounts add anthropic --name work-pro --key env:ANTHROPIC_WORK_KEY --tier subscription
-  brain accounts add openai --name personal --key sk-... --tier cheap --priority 2
-  brain accounts add gemini --name google-ai --key env:GEMINI_API_KEY`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			definition, err := router.LookupProvider(args[0])
-			if err != nil {
+func newAccountsAddCmd() *cobra.Command { return newAccountsAddCmdWithDeps(AccountDeps{}) }
+func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
+	var a router.Account
+	var keyStdin, noBrowser, noLogin bool
+	var target string
+	cmd := &cobra.Command{Use: "add [provider]", Short: "Add an account interactively or with explicit flags", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		interactive := terminalInput(cmd)
+		if deps.Interactive != nil {
+			interactive = deps.Interactive()
+		}
+		if len(args) > 0 {
+			a.Provider = args[0]
+		}
+		if interactive && (a.Provider == "" || a.Name == "" || (a.APIKey == "" && !keyStdin && a.Auth != router.AuthNative && a.Auth != router.AuthNone)) {
+			if err := accountWizard(cmd, &a); err != nil {
 				return err
 			}
-			provider := definition.ID
-			if apiKey == "" && provider != router.ProviderLocal {
-				return fmt.Errorf("API credential is required; use --key env:VARIABLE")
+		} else if a.Provider == "" || a.Name == "" {
+			return fmt.Errorf("noninteractive add requires <provider> and --name; use a terminal for the wizard")
+		}
+		if keyStdin {
+			if a.APIKey != "" {
+				return fmt.Errorf("choose either --key or --key-stdin")
 			}
-			if name == "" {
-				name = fmt.Sprintf("%s-%d", provider, time.Now().Unix()%10000)
+			data, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 65537))
+			if err != nil || len(data) > 65536 {
+				return fmt.Errorf("cannot read credential from stdin")
 			}
-			if tier == "" {
-				tier = router.TierSubscription
+			a.APIKey = strings.TrimSpace(string(data))
+		}
+		if target != "" && target != "cli" && target != "gateway" && target != "both" {
+			return fmt.Errorf("--for must be cli, gateway, or both")
+		}
+		p, err := router.LookupProvider(a.Provider)
+		if err != nil {
+			return err
+		}
+		if target == "gateway" || target == "both" {
+			if a.Auth == router.AuthNative || len(p.Protocols) == 0 {
+				return fmt.Errorf("this account supports native CLI login only; choose an API or OAuth gateway account")
 			}
-			if priority <= 0 {
-				priority = 1
-			}
-
-			path, err := accountsConfigPath()
-			if err != nil {
+		}
+		s, err := accountService()
+		if err != nil {
+			return err
+		}
+		added, err := s.Add(cmd.Context(), a)
+		if err != nil {
+			return err
+		}
+		if !noLogin && (added.Auth == router.AuthNative || added.Auth == router.AuthOAuth) {
+			if err = connectAccount(cmd, deps, s, added, noBrowser); err != nil {
 				return err
 			}
-
-			cfg, err := router.LoadRouterConfig(path)
-			if err != nil {
-				return err
-			}
-
-			newAcc := router.Account{
-				ID:       name,
-				Name:     name,
-				Provider: provider,
-				APIKey:   apiKey,
-				BaseURL:  baseURL,
-				Tier:     tier,
-				Priority: priority,
-				Enabled:  true,
-				Status:   router.StatusActive,
-			}
-
-			// Upsert account
-			updated := false
-			for i, a := range cfg.Accounts {
-				if a.ID == name {
-					if router.NormalizeProvider(a.Provider) != provider {
-						return fmt.Errorf("account name is already used by another provider")
-					}
-					cfg.Accounts[i] = newAcc
-					updated = true
-					break
-				}
-			}
-			if !updated {
-				cfg.Accounts = append(cfg.Accounts, newAcc)
-			}
-
-			if err := router.SaveRouterConfig(path, cfg); err != nil {
-				return err
-			}
-
-			fmt.Printf("✓ Account %q (%s, %s tier) saved successfully to %s\n", name, provider, tier, path)
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&name, "name", "", "Account identifier (e.g. work, personal)")
-	cmd.Flags().StringVar(&apiKey, "key", "", "API key or env:VAR_NAME reference")
-	cmd.Flags().StringVar(&tier, "tier", "subscription", "Account tier (subscription, cheap, free, local)")
-	cmd.Flags().IntVar(&priority, "priority", 1, "Priority order (1 = highest)")
-	cmd.Flags().StringVar(&baseURL, "base-url", "", "Custom upstream base URL")
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Account %s saved. Verify with: brain accounts test %s\n", added.Reference(), added.Reference())
+		fmt.Fprintln(cmd.ErrOrStderr(), "Restart a running brain serve to load account changes.")
+		return nil
+	}}
+	f := cmd.Flags()
+	f.StringVar(&a.Name, "name", "", "Account name within the provider")
+	f.StringVar(&a.Auth, "auth", "", "Authentication: api-key, native, oauth, none")
+	f.StringVar(&a.APIKey, "key", "", "Credential reference (env:NAME or file:PATH); prefer --key-stdin for a literal key")
+	f.BoolVar(&keyStdin, "key-stdin", false, "Read a secret from stdin without printing it")
+	f.StringVar(&a.Tier, "tier", "", "Routing tier: subscription, cheap, free, local")
+	f.IntVar(&a.Priority, "priority", 1, "Routing priority; smaller is preferred")
+	f.StringVar(&a.BaseURL, "base-url", "", "Explicit upstream base URL (host or /v1 root)")
+	f.StringSliceVar(&a.Models, "models", nil, "Allowed model IDs, comma separated")
+	f.StringSliceVar(&a.Protocols, "protocols", nil, "Supported protocols: chat,responses,messages,gemini")
+	f.StringVar(&a.BridgeURL, "bridge-url", "", "Dedicated CLIProxyAPI v8 management URL")
+	f.StringVar(&a.BridgeKey, "bridge-key", "", "Bridge management credential reference")
+	f.StringVar(&target, "for", "", "Requested connection: cli, gateway, both")
+	f.BoolVar(&noBrowser, "no-browser", false, "Print OAuth URL or use the native device flow")
+	f.BoolVar(&noLogin, "no-login", false, "Save a pending native/OAuth account without starting login")
 	return cmd
 }
 
 func newAccountsRemoveCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "remove <id>",
-		Aliases: []string{"rm", "delete"},
-		Short:   "Remove an account by ID",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			id := args[0]
-			path, err := accountsConfigPath()
-			if err != nil {
-				return err
-			}
-
-			cfg, err := router.LoadRouterConfig(path)
-			if err != nil {
-				return err
-			}
-
-			found := false
-			var remaining []router.Account
-			for _, a := range cfg.Accounts {
-				if a.ID == id {
-					found = true
-					continue
-				}
-				remaining = append(remaining, a)
-			}
-
-			if !found {
-				return fmt.Errorf("account with id %q not found", id)
-			}
-
-			cfg.Accounts = remaining
-			if err := router.SaveRouterConfig(path, cfg); err != nil {
-				return err
-			}
-
-			fmt.Printf("✓ Removed account %q\n", id)
-			return nil
-		},
-	}
-	return cmd
+	return &cobra.Command{Use: "remove <provider/name-or-id>", Aliases: []string{"rm", "delete"}, Short: "Remove an account binding; native sessions and upstream credentials remain", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := accountService()
+		if err != nil {
+			return err
+		}
+		if err = s.Remove(cmd.Context(), args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Account removed. Native sessions and upstream credentials were not revoked. Restart a running gateway.")
+		return nil
+	}}
 }
 
-func isEnvRef(s string) bool {
-	return len(s) > 4 && s[:4] == "env:"
+func newAccountUseCmd() *cobra.Command {
+	return &cobra.Command{Use: "use <provider/name-or-id>", Short: "Choose the default CLI account for its provider", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := accountService()
+		if err != nil {
+			return err
+		}
+		if err = s.Use(cmd.Context(), args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Default account selected.")
+		return nil
+	}}
+}
+
+func newAccountEnabledCmd(enabled bool) *cobra.Command {
+	verb := "disable"
+	if enabled {
+		verb = "enable"
+	}
+	return &cobra.Command{Use: verb + " <provider/name-or-id>", Short: verb + " an account", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := accountService()
+		if err != nil {
+			return err
+		}
+		return s.Update(cmd.Context(), args[0], func(a *router.Account) error {
+			a.Enabled = enabled
+			if enabled {
+				a.Status = router.StatusConfigured
+				if a.Auth == router.AuthNative || a.Auth == router.AuthOAuth {
+					a.Status = router.StatusPending
+				}
+			} else {
+				a.Status = router.StatusDisabled
+			}
+			fmt.Fprintln(cmd.ErrOrStderr(), "Restart a running gateway after changes.")
+			return nil
+		})
+	}}
+}
+
+func newProvidersCmd() *cobra.Command {
+	var jsonOutput bool
+	list := &cobra.Command{Use: "list", Short: "Show provider authentication, protocols, and prerequisites", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if jsonOutput {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(router.Providers())
+		}
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "PROVIDER\tAUTH\tGATEWAY PROTOCOLS\tDETAILS")
+		for _, p := range router.Providers() {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.ID, strings.Join(p.Auth, ","), strings.Join(p.Protocols, ","), p.Note)
+		}
+		return w.Flush()
+	}}
+	list.Flags().BoolVar(&jsonOutput, "json", false, "Print capabilities as JSON")
+	cmd := &cobra.Command{Use: "providers", Short: "Inspect supported providers and their capability requirements"}
+	cmd.AddCommand(list)
+	return cmd
 }
