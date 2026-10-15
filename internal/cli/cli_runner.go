@@ -133,7 +133,7 @@ Subcommands & Examples:
 				if len(loginArgs) == 0 {
 					switch tool {
 					case "agy", "antigravity":
-						loginArgs = []string{"auth", "login"}
+						loginArgs = []string{} // agy launches interactive session directly
 					case "opencode":
 						loginArgs = []string{"auth", "login"}
 					default:
@@ -145,7 +145,7 @@ Subcommands & Examples:
 				loginCmd.Stdin = os.Stdin
 				loginCmd.Stdout = os.Stdout
 				loginCmd.Stderr = os.Stderr
-				loginCmd.Env = append(os.Environ(), getToolProfileEnv(tool, profileDir)...)
+				loginCmd.Env = append(os.Environ(), getToolProfileEnv(tool, account, profileDir)...)
 
 				fmt.Printf("🔐 [Agent-Brain] Launching %s login under profile %q (%s)\n", tool, account, profileDir)
 				return loginCmd.Run()
@@ -165,7 +165,7 @@ Subcommands & Examples:
 				if err := os.MkdirAll(profileDir, 0o700); err != nil {
 					return fmt.Errorf("create profile directory: %w", err)
 				}
-				childEnv = append(childEnv, getToolProfileEnv(tool, profileDir)...)
+				childEnv = append(childEnv, getToolProfileEnv(tool, account, profileDir)...)
 				fmt.Fprintf(os.Stderr, "👤 [Agent-Brain] Active CLI Profile: %s (%s)\n", account, profileDir)
 			}
 
@@ -203,8 +203,8 @@ Subcommands & Examples:
 	return cmd
 }
 
-func getToolProfileEnv(tool, profileDir string) []string {
-	return []string{
+func getToolProfileEnv(tool, account, profileDir string) []string {
+	env := []string{
 		"CLAUDE_CONFIG_DIR=" + profileDir,
 		"ANTIGRAVITY_CONFIG_DIR=" + profileDir,
 		"CODEX_CONFIG_DIR=" + profileDir,
@@ -212,6 +212,10 @@ func getToolProfileEnv(tool, profileDir string) []string {
 		"AIDER_CONFIG_DIR=" + profileDir,
 		"XDG_CONFIG_HOME=" + profileDir,
 	}
+	if account != "" {
+		env = append(env, "AGY_ACCOUNT="+account)
+	}
+	return env
 }
 
 func runListProfiles(profilesBaseDir string) error {

@@ -10,7 +10,7 @@ import (
 
 func TestGetToolProfileEnv(t *testing.T) {
 	dir := "/tmp/test-profile"
-	env := getToolProfileEnv("claude", dir)
+	env := getToolProfileEnv("agy", "donwidev", dir)
 
 	expectedKeys := []string{
 		"CLAUDE_CONFIG_DIR=/tmp/test-profile",
@@ -19,6 +19,7 @@ func TestGetToolProfileEnv(t *testing.T) {
 		"OPENCODE_CONFIG_DIR=/tmp/test-profile",
 		"AIDER_CONFIG_DIR=/tmp/test-profile",
 		"XDG_CONFIG_HOME=/tmp/test-profile",
+		"AGY_ACCOUNT=donwidev",
 	}
 
 	for _, k := range expectedKeys {
