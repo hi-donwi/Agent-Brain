@@ -126,8 +126,8 @@ func (s AccountService) Add(ctx context.Context, account Account) (Account, erro
 	account.ID = uuid.NewString()
 	account.Enabled = true
 	account.Status = StatusConfigured
-	account.GatewayReady = account.Auth != AuthNative && len(mustProvider(account.Provider).Protocols) > 0
-	account.CLIReady = account.Provider == "cursor"
+	account.GatewayReady = false
+	account.CLIReady = false
 	if account.Auth == AuthNative || account.Auth == AuthOAuth {
 		account.Status = StatusPending
 		account.CLIReady = false
@@ -156,8 +156,6 @@ func (s AccountService) Add(ctx context.Context, account Account) (Account, erro
 	})
 	return account, err
 }
-
-func mustProvider(id string) Provider { p, _ := LookupProvider(id); return p }
 
 func (s AccountService) storeSecret(name, value string) (string, error) {
 	if value == "" || strings.HasPrefix(value, "env:") || strings.HasPrefix(value, "file:") {

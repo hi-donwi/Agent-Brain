@@ -16,6 +16,9 @@ func TestAccountServiceNamespacesAndPreservesSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if one.Status == StatusActive || one.GatewayReady {
+		t.Fatal("an unverified credential was advertised as ready")
+	}
 	two, err := s.Add(ctx, Account{Name: "work", Provider: ProviderAnthropic, APIKey: "env:TEST_ANTHROPIC_KEY"})
 	if err != nil {
 		t.Fatal(err)

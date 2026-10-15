@@ -113,6 +113,9 @@ func (a Account) Supports(protocol string) bool {
 	if len(a.Protocols) > 0 {
 		return contains(a.Protocols, protocol)
 	}
+	if NormalizeProvider(a.Provider) == ProviderLocal {
+		return protocol == ProtocolChat || protocol == ProtocolEmbeddings
+	}
 	p, err := LookupProvider(a.Provider)
 	return err == nil && contains(p.Protocols, protocol)
 }

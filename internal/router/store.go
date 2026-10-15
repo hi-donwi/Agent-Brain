@@ -23,7 +23,7 @@ func LoadRouterConfig(path string) (RouterConfig, error) {
 
 	cfg := DefaultRouterConfig()
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return RouterConfig{}, fmt.Errorf("parse router config %s: %w", path, err)
+		return RouterConfig{}, fmt.Errorf("parse router config %s: invalid YAML", path)
 	}
 	ids := make(map[string]bool)
 	for i := range cfg.Accounts {
@@ -31,6 +31,13 @@ func LoadRouterConfig(path string) (RouterConfig, error) {
 		a.Provider = NormalizeProvider(a.Provider)
 		if _, err := LookupProvider(a.Provider); err != nil {
 			return RouterConfig{}, err
+		}
+		validation := *a
+		if validation.Auth == "" {
+			validation.Name = "legacy"
+		}
+		if err := validateAccount(&validation); err != nil {
+			return RouterConfig{}, fmt.Errorf("invalid account %q: %w", a.ID, err)
 		}
 		if a.ID == "" || ids[a.ID] {
 			return RouterConfig{}, fmt.Errorf("account config contains empty or duplicate IDs")

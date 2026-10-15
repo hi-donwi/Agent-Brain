@@ -28,10 +28,10 @@ func NewAccountPool(cfg RouterConfig) *AccountPool {
 		p.strategy = "priority"
 	}
 	for i, a := range cfg.Accounts {
-		cp := a
+		cp := *copyAccount(&a)
 		cp.Provider = NormalizeProvider(cp.Provider)
 		if cp.Status == "" {
-			cp.Status = StatusActive
+			cp.Status = StatusConfigured
 		}
 		p.accounts[i] = &cp
 	}
@@ -43,8 +43,10 @@ func (p *AccountPool) AddAccount(acc Account) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	acc.Provider = NormalizeProvider(acc.Provider)
+	acc = *copyAccount(&acc)
 	if acc.Status == "" {
-		acc.Status = StatusActive
+		acc.Status = StatusConfigured
 	}
 
 	for i, existing := range p.accounts {
@@ -78,8 +80,7 @@ func (p *AccountPool) ListAccounts() []Account {
 	now := time.Now()
 	res := make([]Account, len(p.accounts))
 	for i, a := range p.accounts {
-		cp := *a
-		cp.Headers = maps.Clone(a.Headers)
+		cp := *copyAccount(a)
 		if cp.Status == StatusRateLimited && !cp.Cooldown.IsZero() && now.After(cp.Cooldown) {
 			cp.Status = StatusActive
 		}
@@ -192,10 +193,12 @@ func (p *AccountPool) ReportResult(accountID string, statusCode int, retryAfter 
 
 		case statusCode == 401 || statusCode == 402 || statusCode == 403:
 			a.Status = StatusExhausted
+			a.GatewayReady = false
 			a.FailCount++
 
 		case statusCode >= 200 && statusCode < 300:
 			a.Status = StatusActive
+			a.GatewayReady = true
 			a.FailCount = 0
 			a.Cooldown = time.Time{}
 		}
