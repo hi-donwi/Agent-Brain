@@ -62,6 +62,7 @@ func (f *fakeCliAdapter) Unload(_ context.Context, _ string) error {
 
 func TestCLI_RagCommands(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv(home.EnvVar, tmpDir)
 	corpusDir := filepath.Join(tmpDir, "docs")
 	_ = os.MkdirAll(corpusDir, 0o755)
 
