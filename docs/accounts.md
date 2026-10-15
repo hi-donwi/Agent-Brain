@@ -3,9 +3,13 @@
 ## Interactive and scripted setup
 
 Run `brain accounts add` in a terminal. Choose a provider ID, authentication
-method, and account name. API-key accounts accept `env:NAME` or an absolute
-`file:PATH` reference. Use `--key-stdin` for a literal key stored privately by
-Brain. Piped input without required flags returns an error instead of opening
+method, and account name. At the API-key prompt, paste the key directly; terminal
+input is hidden. Brain saves it in a separate private credential file and keeps
+only a file reference in `accounts.yaml`. This works for Anthropic, OpenAI,
+Google AI Studio and every other API-key provider. Keys must be shorter than
+4096 bytes. `env:NAME` and absolute `file:PATH` references remain supported.
+For scripts, use `--key-stdin` to supply a literal key without a command-line
+argument. Piped input without required flags returns an error instead of opening
 the wizard.
 
 The wizard lists provider prerequisites before starting authentication. Choosing

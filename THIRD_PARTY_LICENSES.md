@@ -21,6 +21,10 @@ and their respective open-source licenses. All dependencies use permissive licen
 - **License:** Apache License 2.0
 - **Copyright:** Copyright 2013-2024 Steve Francia and Cobra Contributors
 
+### golang.org/x/term
+- **License:** BSD 3-Clause License
+- **Copyright:** Copyright 2009 The Go Authors. All rights reserved.
+
 ### gopkg.in/yaml.v3
 - **License:** MIT and Apache 2.0 Licenses
 - **Copyright:** Copyright (c) 2019-2020 Canonical Ltd.

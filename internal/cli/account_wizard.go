@@ -7,10 +7,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func terminalInput(cmd *cobra.Command) bool {
@@ -22,8 +24,49 @@ func terminalInput(cmd *cobra.Command) bool {
 }
 
 type accountPrompts struct {
-	reader *bufio.Reader
-	output io.Writer
+	reader   *bufio.Reader
+	output   io.Writer
+	terminal *os.File
+}
+
+func (p accountPrompts) credential() (string, error) {
+	const label = "API key (paste key, env:NAME or file:PATH; q to cancel)"
+	var value string
+	var err error
+	if p.terminal == nil {
+		value, err = p.read(label, "")
+	} else {
+		fd := int(p.terminal.Fd())
+		state, rawErr := term.MakeRaw(fd)
+		if rawErr != nil {
+			return "", fmt.Errorf("cannot hide credential input; use --key-stdin or --key env:NAME")
+		}
+		defer term.Restore(fd, state)
+		terminal := term.NewTerminal(struct {
+			io.Reader
+			io.Writer
+		}{p.reader, p.output}, "")
+		value, err = terminal.ReadPassword(label + ": ")
+	}
+	if err != nil && err != term.ErrPasteIndicator {
+		return "", fmt.Errorf("account setup cancelled or credential input ended")
+	}
+	// x/term's line editor caps input at 4096 runes. Reject a full line so a
+	// pasted credential is never silently saved after terminal truncation.
+	if len(value) >= 4096 {
+		return "", fmt.Errorf("credential must be shorter than 4096 bytes")
+	}
+	value = strings.TrimSpace(value)
+	if value == "q" || value == "quit" {
+		return "", fmt.Errorf("account setup cancelled")
+	}
+	if value == "" {
+		return "", fmt.Errorf("credential is required")
+	}
+	if strings.ContainsFunc(value, unicode.IsControl) {
+		return "", fmt.Errorf("credential must be a single line without control characters")
+	}
+	return value, nil
 }
 
 func (p accountPrompts) read(label, initial string) (string, error) {
@@ -68,7 +111,10 @@ func (p accountPrompts) choose(label string, options []string) (string, error) {
 }
 
 func accountWizard(cmd *cobra.Command, a *router.Account) error {
-	p := accountPrompts{bufio.NewReader(cmd.InOrStdin()), cmd.ErrOrStderr()}
+	p := accountPrompts{reader: bufio.NewReader(cmd.InOrStdin()), output: cmd.ErrOrStderr()}
+	if terminalInput(cmd) {
+		p.terminal = cmd.InOrStdin().(*os.File)
+	}
 	var definition router.Provider
 	var err error
 	for {
@@ -113,12 +159,9 @@ func accountWizard(cmd *cobra.Command, a *router.Account) error {
 		if definition.KeyURL != "" {
 			fmt.Fprintln(p.output, "Create or manage an API key at:", definition.KeyURL)
 		}
-		a.APIKey, err = p.read("Credential reference (env:NAME or file:PATH; q to cancel)", "")
+		a.APIKey, err = p.credential()
 		if err != nil {
 			return err
-		}
-		if !strings.HasPrefix(a.APIKey, "env:") && !strings.HasPrefix(a.APIKey, "file:") {
-			return fmt.Errorf("wizard accepts secret references only; use --key-stdin to store a literal key privately")
 		}
 	}
 	if a.Auth == router.AuthOAuth && (a.BaseURL != "" || a.BridgeURL != "" || a.APIKey != "" || a.BridgeKey != "" || externalBridgeRequested(cmd)) {

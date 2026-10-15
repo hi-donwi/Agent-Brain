@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -49,6 +50,129 @@ func TestAccountWizardAndScriptShareValidation(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "WIZARD_TEST_KEY") {
 		t.Fatal("credential reference leaked in account metadata")
+	}
+}
+
+func TestAccountWizardStoresPastedAPIKeysPrivately(t *testing.T) {
+	for _, provider := range []string{"anthropic", "openai", "google-ai-studio", "deepseek", "openrouter", "cursor", "local", "custom", "opencode-zen"} {
+		t.Run(provider, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("LOKAL_HOME", root)
+			const secret = "test-only-pasted-credential"
+			cmd := newAccountsCmdWithDeps(AccountDeps{Interactive: func() bool { return true }})
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&output)
+			cmd.SetIn(strings.NewReader("  " + secret + "  \n"))
+			cmd.SetArgs([]string{"add", provider, "--auth", "api-key", "--name", "work", "--no-login", "--base-url", "http://127.0.0.1:12345", "--protocols", supportedTestProtocol(provider)})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("pasted credential rejected: %v", err)
+			}
+			service := router.AccountService{Path: filepath.Join(root, "accounts.yaml")}
+			a, err := service.Find(provider + "/work")
+			if err != nil || !strings.HasPrefix(a.APIKey, "file:") {
+				t.Fatal("pasted credential was not stored as a private file reference")
+			}
+			value, err := router.ResolveCredential(a.APIKey)
+			if err != nil || value != secret {
+				t.Fatal("stored credential does not match pasted input")
+			}
+			path := strings.TrimPrefix(a.APIKey, "file:")
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+				t.Fatal("credential file permissions are not private")
+			}
+			data, err := os.ReadFile(service.Path)
+			if err != nil || bytes.Contains(data, []byte(secret)) {
+				t.Fatal("raw credential leaked into account configuration")
+			}
+			list := newAccountsCmd()
+			list.SetOut(&output)
+			list.SetArgs([]string{"list", "--json"})
+			if err := list.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(output.String(), secret) {
+				t.Fatal("pasted credential leaked into command output")
+			}
+		})
+	}
+}
+
+func supportedTestProtocol(provider string) string {
+	definition, _ := router.LookupProvider(provider)
+	if len(definition.Protocols) == 0 {
+		return ""
+	}
+	return definition.Protocols[0]
+}
+
+func TestAccountWizardPastedCredentialCancellation(t *testing.T) {
+	for _, input := range []string{"q\n", "quit\n", "", "\nq\n"} {
+		t.Run(fmt.Sprintf("input-%d", len(input)), func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("LOKAL_HOME", root)
+			cmd := newAccountsCmdWithDeps(AccountDeps{Interactive: func() bool { return true }})
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&output)
+			cmd.SetIn(strings.NewReader(input))
+			cmd.SetArgs([]string{"add", "anthropic", "--name", "work", "--auth", "api-key", "--no-login"})
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("cancelled or empty credential input created an account")
+			}
+			if _, err := os.Stat(filepath.Join(root, "accounts.yaml")); !os.IsNotExist(err) {
+				t.Fatal("cancelled wizard persisted an account")
+			}
+		})
+	}
+}
+
+func TestAccountWizardRejectsInvalidPastedCredentialsWithoutDisclosure(t *testing.T) {
+	for _, input := range []string{strings.Repeat("x", 4096), "test\x00credential", "test\tcredential"} {
+		root := t.TempDir()
+		t.Setenv("LOKAL_HOME", root)
+		cmd := newAccountsCmdWithDeps(AccountDeps{Interactive: func() bool { return true }})
+		var output bytes.Buffer
+		cmd.SetOut(&output)
+		cmd.SetErr(&output)
+		cmd.SetIn(strings.NewReader(input + "\n"))
+		cmd.SetArgs([]string{"add", "anthropic", "--auth", "api-key", "--name", "work", "--no-login"})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("invalid pasted credential was accepted")
+		}
+		if strings.Contains(output.String()+err.Error(), input) {
+			t.Fatal("invalid credential leaked into output or errors")
+		}
+		if _, err := os.Stat(filepath.Join(root, "accounts.yaml")); !os.IsNotExist(err) {
+			t.Fatal("invalid credential created an account")
+		}
+	}
+}
+
+func TestAccountWizardKeepsFileCredentialReferences(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOKAL_HOME", root)
+	reference := "file:" + filepath.Join(root, "existing-credential")
+	cmd := newAccountsCmdWithDeps(AccountDeps{Interactive: func() bool { return true }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetIn(strings.NewReader(reference + "\n"))
+	cmd.SetArgs([]string{"add", "anthropic", "--auth", "api-key", "--name", "work", "--no-login"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	a, err := (router.AccountService{Path: filepath.Join(root, "accounts.yaml")}).Find("anthropic/work")
+	if err != nil || a.APIKey != reference {
+		t.Fatal("existing file reference was changed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "secrets")); !os.IsNotExist(err) {
+		t.Fatal("wizard copied a credential reference into secret storage")
 	}
 }
 
