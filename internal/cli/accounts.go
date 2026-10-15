@@ -33,7 +33,7 @@ func accountService() (router.AccountService, error) {
 func newAccountsCmd() *cobra.Command { return newAccountsCmdWithDeps(AccountDeps{}) }
 func newAccountsCmdWithDeps(deps AccountDeps) *cobra.Command {
 	cmd := &cobra.Command{Use: "accounts", Aliases: []string{"acc", "account"}, Short: "Manage provider accounts, native login, and gateway credentials"}
-	cmd.AddCommand(newAccountsListCmd(), newAccountsAddCmdWithDeps(deps), newAccountsRemoveCmd(), newAccountUseCmd(), newAccountLoginCmd(deps), newAccountTestCmd())
+	cmd.AddCommand(newAccountsListCmd(), newAccountsAddCmdWithDeps(deps), newAccountsRemoveCmd(), newAccountUseCmd(), newAccountLoginCmd(deps), newAccountTestCmd(), newAccountModelsCmd())
 	for _, enabled := range []bool{true, false} {
 		cmd.AddCommand(newAccountEnabledCmd(enabled))
 	}
@@ -134,13 +134,45 @@ func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		added, err := s.Add(cmd.Context(), a)
+		a.Provider = p.ID
+		if a.Provider == router.ProviderAntigravity && a.Auth == "" {
+			a.Auth = router.AuthOAuth
+		}
+		if a.Auth == router.AuthOAuth && !externalBridgeRequested(cmd) && a.BaseURL == "" && a.BridgeURL == "" && a.APIKey == "" && a.BridgeKey == "" {
+			a.ManagedBridge = true
+		}
+		var added router.Account
+		existing, findErr := s.Find(a.Reference())
+		if findErr == nil && a.ManagedBridge && existing.Auth == router.AuthOAuth && !existing.GatewayReady && (existing.Status == router.StatusPending || existing.Status == router.StatusReauth) {
+			added, err = s.EnableManaged(cmd.Context(), existing.ID)
+			if err == nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Resuming incomplete account %s with automatic bridge setup.\n", added.Reference())
+			}
+		} else {
+			added, err = s.Add(cmd.Context(), a)
+		}
 		if err != nil {
 			return err
 		}
 		if !noLogin && (added.Auth == router.AuthNative || added.Auth == router.AuthOAuth) {
 			if err = connectAccount(cmd, deps, s, added, noBrowser); err != nil {
 				return err
+			}
+		}
+		if !noLogin && added.Auth != router.AuthNative && added.Auth != router.AuthOAuth && len(p.Protocols) > 0 {
+			key, keyErr := router.ResolveCredential(added.APIKey)
+			if added.Auth == router.AuthNone || (keyErr == nil && key != "") {
+				verified, discoveryErr := checkAccount(cmd.Context(), added, filepath.Dir(s.Path), false, "")
+				if discoveryErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Account saved; model discovery is incomplete: %v. Retry: brain accounts models %s --refresh\n", discoveryErr, added.Reference())
+				} else {
+					if err := saveVerifiedAccount(cmd.Context(), s, verified); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Discovered %d models for %s. List them with: brain accounts models %s\n", len(verified.DiscoveredModels), added.Reference(), added.Reference())
+				}
+			} else {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Credential is not available yet. After configuring it, run: brain accounts models %s --refresh\n", added.Reference())
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Account %s saved. Verify with: brain accounts test %s\n", added.Reference(), added.Reference())
@@ -161,7 +193,8 @@ func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
 	f.StringVar(&a.BridgeKey, "bridge-key", "", "Bridge management credential reference")
 	f.StringVar(&target, "for", "", "Requested connection: cli, gateway, both")
 	f.BoolVar(&noBrowser, "no-browser", false, "Print OAuth URL or use the native device flow")
-	f.BoolVar(&noLogin, "no-login", false, "Save a pending native/OAuth account without starting login")
+	f.Bool("external-bridge", false, "Configure an externally managed OAuth bridge instead of automatic setup")
+	f.BoolVar(&noLogin, "no-login", false, "Save without signing in or discovering models")
 	return cmd
 }
 

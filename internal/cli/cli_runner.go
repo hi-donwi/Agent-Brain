@@ -14,6 +14,7 @@ import (
 
 	"github.com/hi-donwi/Agent-Brain/internal/gateway"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/oauthbridge"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/spf13/cobra"
 )
@@ -203,15 +204,6 @@ Use -- before tool arguments that share names with Brain launcher flags.`, Disab
 		if !account.Enabled {
 			return fmt.Errorf("selected account is disabled")
 		}
-		if account.Auth == router.AuthOAuth {
-			if !account.GatewayReady {
-				return fmt.Errorf("OAuth account is not ready; run accounts login or accounts test")
-			}
-			bridge := router.BridgeClient{URL: account.BridgeURL, Key: account.BridgeKey}
-			if _, err := bridge.Verify(cmd.Context(), account.Provider, account.BridgeCredential); err != nil {
-				return err
-			}
-		}
 		url := fmt.Sprintf("http://127.0.0.1:%d", options.port)
 		token := ""
 		if account.Auth != router.AuthNative && tool != "cursor-agent" && !options.direct {
@@ -229,6 +221,22 @@ Use -- before tool arguments that share names with Brain launcher flags.`, Disab
 				return fmt.Errorf("gateway token is unavailable; start brain serve")
 			}
 			token = gateway.ScopedToken(strings.TrimSpace(string(data)), account.ID)
+		}
+		if options.direct && account.ManagedBridge {
+			stop, err := (oauthbridge.Manager{Root: layout.Root, Output: cmd.ErrOrStderr()}).Use(cmd.Context(), account)
+			if err != nil {
+				return err
+			}
+			defer stop()
+		}
+		if account.Auth == router.AuthOAuth {
+			if !account.GatewayReady {
+				return fmt.Errorf("OAuth account is not ready; run accounts login or accounts test")
+			}
+			bridge := router.BridgeClient{URL: account.BridgeURL, Key: account.BridgeKey}
+			if _, err := bridge.Verify(cmd.Context(), account.Provider, account.BridgeCredential); err != nil {
+				return err
+			}
 		}
 		plan, err := buildLaunchPlan(tool, account, layout.Root, url, token, options.direct, options.args)
 		if err != nil {

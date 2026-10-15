@@ -16,6 +16,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/catalog"
 	"github.com/hi-donwi/Agent-Brain/internal/gateway"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/oauthbridge"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
 	"github.com/spf13/cobra"
@@ -128,6 +129,22 @@ to ~/.lokal/serve.token with mode 0600.`,
 				if err != nil {
 					return fmt.Errorf("load provider accounts: %w", err)
 				}
+			}
+			var bridgeStops []func()
+			defer func() {
+				for i := len(bridgeStops) - 1; i >= 0; i-- {
+					bridgeStops[i]()
+				}
+			}()
+			for _, account := range routerCfg.Accounts {
+				if !account.Enabled || !account.ManagedBridge {
+					continue
+				}
+				stop, err := (oauthbridge.Manager{Root: layout.Root, Output: cmd.ErrOrStderr()}).Start(ctx, account)
+				if err != nil {
+					return fmt.Errorf("start bridge for %s: %w", account.Reference(), err)
+				}
+				bridgeStops = append(bridgeStops, stop)
 			}
 			accountPool := router.NewAccountPool(routerCfg)
 

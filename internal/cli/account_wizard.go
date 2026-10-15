@@ -121,7 +121,7 @@ func accountWizard(cmd *cobra.Command, a *router.Account) error {
 			return fmt.Errorf("wizard accepts secret references only; use --key-stdin to store a literal key privately")
 		}
 	}
-	if a.Auth == router.AuthOAuth {
+	if a.Auth == router.AuthOAuth && (a.BaseURL != "" || a.BridgeURL != "" || a.APIKey != "" || a.BridgeKey != "" || externalBridgeRequested(cmd)) {
 		if a.BaseURL == "" {
 			a.BaseURL, err = p.read("Dedicated bridge inference URL", "http://127.0.0.1:8317")
 			if err != nil {
@@ -160,14 +160,10 @@ func accountWizard(cmd *cobra.Command, a *router.Account) error {
 		}
 		a.Protocols = []string{value}
 	}
-	if len(definition.Protocols) > 0 && len(a.Models) == 0 {
-		value, err := p.read("Allowed model IDs (comma separated; blank to discover later)", "")
-		if err != nil {
-			return err
-		}
-		if value != "" {
-			a.Models = strings.Split(value, ",")
-		}
-	}
 	return nil
+}
+
+func externalBridgeRequested(cmd *cobra.Command) bool {
+	value, _ := cmd.Flags().GetBool("external-bridge")
+	return value
 }

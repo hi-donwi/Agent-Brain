@@ -12,9 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/hi-donwi/Agent-Brain/internal/oauthbridge"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
 	"github.com/spf13/cobra"
 )
@@ -35,6 +39,10 @@ func connectAccount(cmd *cobra.Command, deps AccountDeps, s router.AccountServic
 	if err != nil {
 		_ = s.Update(cmd.Context(), a.ID, func(current *router.Account) error {
 			current.Status = router.StatusReauth
+			if updated.BridgeCredential != "" {
+				current.BridgeCredential = updated.BridgeCredential
+				current.Status = router.StatusConfigured
+			}
 			current.CLIReady = false
 			current.GatewayReady = false
 			return nil
@@ -46,6 +54,7 @@ func connectAccount(cmd *cobra.Command, deps AccountDeps, s router.AccountServic
 		current.CLIReady = updated.CLIReady
 		current.GatewayReady = updated.GatewayReady
 		current.BridgeCredential = updated.BridgeCredential
+		current.DiscoveredModels = updated.DiscoveredModels
 		if len(updated.Models) > 0 {
 			current.Models = updated.Models
 		}
@@ -54,7 +63,7 @@ func connectAccount(cmd *cobra.Command, deps AccountDeps, s router.AccountServic
 }
 
 func newAccountLoginCmd(deps AccountDeps) *cobra.Command {
-	var noBrowser bool
+	var noBrowser, managed bool
 	cmd := &cobra.Command{Use: "login <provider/name-or-id>", Short: "Connect a pending native account or start its OAuth login", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := accountService()
 		if err != nil {
@@ -64,24 +73,41 @@ func newAccountLoginCmd(deps AccountDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if managed {
+			a, err = s.EnableManaged(cmd.Context(), a.ID)
+			if err != nil {
+				return err
+			}
+		}
 		return connectAccount(cmd, deps, s, a, noBrowser)
 	}}
+	cmd.Flags().BoolVar(&managed, "managed-bridge", false, "Replace an external OAuth binding with automatic bridge setup")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print a login URL or use native device authentication")
 	return cmd
 }
 
 func loginAccount(cmd *cobra.Command, a router.Account, noBrowser bool, root string) (router.Account, error) {
 	if a.Auth == router.AuthOAuth {
+		stop, err := (oauthbridge.Manager{Root: root, Output: cmd.ErrOrStderr()}).Use(cmd.Context(), a)
+		if err != nil {
+			return a, err
+		}
+		defer stop()
 		bridge := router.BridgeClient{URL: a.BridgeURL, Key: a.BridgeKey}
-		id, err := bridge.Login(cmd.Context(), a.Provider, func(url string) error {
-			fmt.Fprintln(cmd.ErrOrStderr(), "Login URL:", url)
-			if !noBrowser {
-				if err := openBrowser(cmd.Context(), url); err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "Open the printed URL manually to continue.")
+		var id string
+		if a.BridgeCredential != "" {
+			id, err = bridge.Verify(cmd.Context(), a.Provider, a.BridgeCredential)
+		} else {
+			id, err = bridge.Login(cmd.Context(), a.Provider, func(url string) error {
+				fmt.Fprintln(cmd.ErrOrStderr(), "Login URL:", url)
+				if !noBrowser {
+					if err := openBrowser(cmd.Context(), url); err != nil {
+						fmt.Fprintln(cmd.ErrOrStderr(), "Open the printed URL manually to continue.")
+					}
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 		if err != nil {
 			return a, err
 		}
@@ -94,6 +120,11 @@ func loginAccount(cmd *cobra.Command, a router.Account, noBrowser bool, root str
 		}
 		a = verified
 		fmt.Fprintln(cmd.OutOrStdout(), "OAuth identity verified. Gateway ready; native CLI session isolation is a separate capability.")
+		fmt.Fprintf(cmd.OutOrStdout(), "Available models for %s (%d):\n", a.Reference(), len(a.DiscoveredModels))
+		for _, model := range a.DiscoveredModels {
+			fmt.Fprintln(cmd.OutOrStdout(), "  "+model)
+		}
+
 		return a, nil
 	}
 	if a.Auth != router.AuthNative {
@@ -249,9 +280,8 @@ func newAccountTestCmd() *cobra.Command {
 			current.CLIReady = updated.CLIReady
 			current.GatewayReady = updated.GatewayReady
 			current.BridgeCredential = updated.BridgeCredential
-			if len(current.Models) == 0 {
-				current.Models = updated.Models
-			}
+			current.DiscoveredModels = updated.DiscoveredModels
+			current.Models = updated.Models
 			return nil
 		}); err != nil {
 			return err
@@ -266,6 +296,15 @@ func newAccountTestCmd() *cobra.Command {
 }
 
 func checkAccount(ctx context.Context, a router.Account, root string, probe bool, model string) (router.Account, error) {
+	stop, err := (oauthbridge.Manager{Root: root}).Use(ctx, a)
+	if err != nil {
+		return a, err
+	}
+	defer stop()
+	if len(a.DiscoveredModels) > 0 && slices.Equal(a.Models, a.DiscoveredModels) {
+		a.Models = nil
+	}
+
 	if a.Auth == router.AuthNative || a.Provider == "cursor" {
 		tool, args, env, err := nativeCommand(a, root, false, true)
 		if err != nil {
@@ -296,70 +335,96 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 			return a, err
 		}
 		a.BridgeCredential = id
-	}
-	p, err := router.LookupProvider(a.Provider)
-	if err != nil {
-		return a, err
-	}
-	endpoint := a.BaseURL
-	if endpoint == "" {
-		endpoint = p.BaseURL
-	}
-	if err := router.ValidateEndpoint(endpoint); err != nil {
-		return a, err
-	}
-	path := "/v1/models"
-	geminiDiscovery := a.Provider == router.ProviderGemini || (a.Supports(router.ProtocolGemini) && !a.Supports(router.ProtocolChat) && !a.Supports(router.ProtocolResponses) && !a.Supports(router.ProtocolMessages))
-	if geminiDiscovery {
-		path = "/v1beta/models"
-	}
-	if a.Provider == router.ProviderDeepSeek {
-		path = "/models"
-	}
-	if strings.HasSuffix(strings.TrimRight(endpoint, "/"), "/v1") {
-		path = strings.TrimPrefix(path, "/v1")
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(endpoint, "/")+path, nil)
-	if err != nil {
-		return a, err
-	}
-	key, err := router.ResolveCredential(a.APIKey)
-	if err != nil {
-		return a, err
-	}
-	if key != "" {
-		switch {
-		case (a.Provider == router.ProviderAnthropic || (a.Supports(router.ProtocolMessages) && !a.Supports(router.ProtocolChat))) && a.Auth != router.AuthOAuth:
-			req.Header.Set("x-api-key", key)
-			req.Header.Set("anthropic-version", "2023-06-01")
-		case geminiDiscovery && a.Auth != router.AuthOAuth:
-			req.Header.Set("x-goog-api-key", key)
-		default:
-			req.Header.Set("Authorization", "Bearer "+key)
+		models, err := bridge.Models(ctx, a.Provider, id)
+		if err != nil {
+			return a, err
 		}
-	}
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return a, fmt.Errorf("cannot reach provider model discovery endpoint")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return a, fmt.Errorf("provider credential/model discovery returned HTTP %d", resp.StatusCode)
-	}
-	var data struct {
-		Data   []struct{ ID string }   `json:"data"`
-		Models []struct{ Name string } `json:"models"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
-		return a, fmt.Errorf("provider returned invalid model metadata")
-	}
-	if len(a.Models) == 0 {
-		for _, m := range data.Data {
-			a.Models = append(a.Models, m.ID)
+		a.DiscoveredModels = models
+		if len(a.Models) == 0 {
+			a.Models = append([]string(nil), models...)
 		}
-		for _, m := range data.Models {
-			a.Models = append(a.Models, strings.TrimPrefix(m.Name, "models/"))
+	} else {
+		p, err := router.LookupProvider(a.Provider)
+		if err != nil {
+			return a, err
+		}
+		endpoint := a.BaseURL
+		if endpoint == "" {
+			endpoint = p.BaseURL
+		}
+		if err := router.ValidateEndpoint(endpoint); err != nil {
+			return a, err
+		}
+		path := "/v1/models"
+		geminiDiscovery := a.Provider == router.ProviderGemini || (a.Supports(router.ProtocolGemini) && !a.Supports(router.ProtocolChat) && !a.Supports(router.ProtocolResponses) && !a.Supports(router.ProtocolMessages))
+		if geminiDiscovery {
+			path = "/v1beta/models"
+		}
+		if a.Provider == router.ProviderDeepSeek {
+			path = "/models"
+		}
+		if strings.HasSuffix(strings.TrimRight(endpoint, "/"), "/v1") {
+			path = strings.TrimPrefix(path, "/v1")
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(endpoint, "/")+path, nil)
+		if err != nil {
+			return a, err
+		}
+		key, err := router.ResolveCredential(a.APIKey)
+		if err != nil {
+			return a, err
+		}
+		if key != "" {
+			switch {
+			case (a.Provider == router.ProviderAnthropic || (a.Supports(router.ProtocolMessages) && !a.Supports(router.ProtocolChat))) && a.Auth != router.AuthOAuth:
+				req.Header.Set("x-api-key", key)
+				req.Header.Set("anthropic-version", "2023-06-01")
+			case geminiDiscovery && a.Auth != router.AuthOAuth:
+				req.Header.Set("x-goog-api-key", key)
+			default:
+				req.Header.Set("Authorization", "Bearer "+key)
+			}
+		}
+		client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := client.Do(req)
+		if err != nil {
+			return a, fmt.Errorf("cannot reach provider model discovery endpoint")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return a, fmt.Errorf("provider credential/model discovery returned HTTP %d", resp.StatusCode)
+		}
+		var data struct {
+			Data   []struct{ ID string }   `json:"data"`
+			Models []struct{ Name string } `json:"models"`
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
+			return a, fmt.Errorf("provider returned invalid model metadata")
+		}
+		var discovered []string
+		for _, item := range data.Data {
+			if item.ID != "" {
+				discovered = append(discovered, item.ID)
+			}
+		}
+		for _, item := range data.Models {
+			if item.Name != "" {
+				discovered = append(discovered, strings.TrimPrefix(item.Name, "models/"))
+			}
+		}
+		for _, id := range discovered {
+			if len(id) > 512 || strings.ContainsFunc(id, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+				return a, fmt.Errorf("provider returned an invalid model ID")
+			}
+		}
+		sort.Strings(discovered)
+		discovered = slices.Compact(discovered)
+		if len(discovered) == 0 {
+			return a, fmt.Errorf("provider returned no available models for this account")
+		}
+		a.DiscoveredModels = discovered
+		if len(a.Models) == 0 {
+			a.Models = append([]string(nil), discovered...)
 		}
 	}
 	if probe {
