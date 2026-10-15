@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -76,5 +77,28 @@ func TestBridgeModelsComeFromTheBoundCredential(t *testing.T) {
 	modelsCalled = false
 	if _, err = b.Models(context.Background(), ProviderAntigravity, "different"); err == nil || modelsCalled {
 		t.Fatal("identity mismatch did not block model discovery")
+	}
+}
+
+func TestBridgeModelsRejectsEmptyOrUnsafeCatalogs(t *testing.T) {
+	for _, ids := range [][]string{{}, {"\x1b[2J"}, {"model with spaces"}} {
+		b := BridgeClient{URL: "http://127.0.0.1:8317/v8/management", Key: "fake", Client: &http.Client{Transport: auditTransport(func(r *http.Request) (*http.Response, error) {
+			body := `{"config-version":8}`
+			switch r.URL.Path {
+			case "/v8/management/credentials":
+				body = `{"files":[{"id":"one","provider":"antigravity","status":"ready"}]}`
+			case "/v8/management/credentials/models":
+				models := make([]map[string]string, 0, len(ids))
+				for _, id := range ids {
+					models = append(models, map[string]string{"id": id})
+				}
+				data, _ := json.Marshal(map[string]any{"models": models})
+				body = string(data)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}}
+		if _, err := b.Models(context.Background(), ProviderAntigravity, "one"); err == nil {
+			t.Fatalf("unsafe model catalog accepted: %q", ids)
+		}
 	}
 }

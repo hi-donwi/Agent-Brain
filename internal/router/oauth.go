@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // BridgeClient implements the documented CLIProxyAPI v8 management contract.
@@ -139,7 +140,7 @@ func (b BridgeClient) Models(ctx context.Context, provider, expected string) ([]
 	seen := make(map[string]bool)
 	var models []string
 	for _, model := range response.Models {
-		if model.ID == "" || len(model.ID) > 512 || strings.ContainsAny(model.ID, "\r\n\x00\t ") {
+		if model.ID == "" || len(model.ID) > 512 || strings.ContainsFunc(model.ID, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
 			return nil, fmt.Errorf("bridge returned an invalid model ID")
 		}
 		if !seen[model.ID] {

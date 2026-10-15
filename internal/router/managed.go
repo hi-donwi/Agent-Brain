@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/google/uuid"
 	"net"
 )
 
@@ -63,11 +64,12 @@ func (s AccountService) EnableManaged(ctx context.Context, ref string) (Account,
 		if err := prepareManagedAccount(&a, cfg.Accounts); err != nil {
 			return err
 		}
-		a.APIKey, err = s.storeSecret(a.ID+".managed.key", a.APIKey)
+		secretID := uuid.NewString()
+		a.APIKey, err = s.storeSecret(secretID+".managed.key", a.APIKey)
 		if err != nil {
 			return err
 		}
-		a.BridgeKey, err = s.storeSecret(a.ID+".managed.bridge", a.BridgeKey)
+		a.BridgeKey, err = s.storeSecret(secretID+".managed.bridge", a.BridgeKey)
 		if err != nil {
 			return err
 		}
