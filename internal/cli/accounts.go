@@ -108,7 +108,14 @@ func newAccountsAddCmd() *cobra.Command {
   brain accounts add gemini --name google-ai --key env:GEMINI_API_KEY`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			provider := args[0]
+			definition, err := router.LookupProvider(args[0])
+			if err != nil {
+				return err
+			}
+			provider := definition.ID
+			if apiKey == "" && provider != router.ProviderLocal {
+				return fmt.Errorf("API credential is required; use --key env:VARIABLE")
+			}
 			if name == "" {
 				name = fmt.Sprintf("%s-%d", provider, time.Now().Unix()%10000)
 			}
@@ -145,6 +152,9 @@ func newAccountsAddCmd() *cobra.Command {
 			updated := false
 			for i, a := range cfg.Accounts {
 				if a.ID == name {
+					if router.NormalizeProvider(a.Provider) != provider {
+						return fmt.Errorf("account name is already used by another provider")
+					}
 					cfg.Accounts[i] = newAcc
 					updated = true
 					break

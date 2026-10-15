@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -28,6 +29,7 @@ func NewAccountPool(cfg RouterConfig) *AccountPool {
 	}
 	for i, a := range cfg.Accounts {
 		cp := a
+		cp.Provider = NormalizeProvider(cp.Provider)
 		if cp.Status == "" {
 			cp.Status = StatusActive
 		}
@@ -77,6 +79,7 @@ func (p *AccountPool) ListAccounts() []Account {
 	res := make([]Account, len(p.accounts))
 	for i, a := range p.accounts {
 		cp := *a
+		cp.Headers = maps.Clone(a.Headers)
 		if cp.Status == StatusRateLimited && !cp.Cooldown.IsZero() && now.After(cp.Cooldown) {
 			cp.Status = StatusActive
 		}
@@ -87,8 +90,13 @@ func (p *AccountPool) ListAccounts() []Account {
 
 // SelectAccount chooses an active account for the specified provider based on tier, priority, or round-robin.
 func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
+	return p.selectAccount(provider, "", nil)
+}
+
+func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bool) (*Account, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	provider = NormalizeProvider(provider)
 
 	now := time.Now()
 
@@ -103,13 +111,13 @@ func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
 	// 2. Filter active candidates for provider
 	var candidates []*Account
 	for _, a := range p.accounts {
-		if !a.Enabled {
+		if !a.Enabled || a.Auth == AuthNative || tried[a.ID] || (pinned != "" && pinned != a.ID) {
 			continue
 		}
 		if provider != "" && a.Provider != provider {
 			continue
 		}
-		if a.Status == StatusActive {
+		if a.Status == StatusActive || a.Status == StatusConfigured {
 			candidates = append(candidates, a)
 		}
 	}
@@ -122,7 +130,7 @@ func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
 	if p.strategy == "round-robin" {
 		idx := p.rrIndices[provider] % len(candidates)
 		p.rrIndices[provider] = (idx + 1) % len(candidates)
-		return candidates[idx], nil
+		return copyAccount(candidates[idx]), nil
 	}
 
 	// Priority order: Tier weight (subscription > cheap > free > local) then Priority int
@@ -150,7 +158,15 @@ func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
 		return candidates[i].Priority < candidates[j].Priority
 	})
 
-	return candidates[0], nil
+	return copyAccount(candidates[0]), nil
+}
+
+func copyAccount(a *Account) *Account {
+	cp := *a
+	cp.Headers = maps.Clone(a.Headers)
+	cp.Models = append([]string(nil), a.Models...)
+	cp.Protocols = append([]string(nil), a.Protocols...)
+	return &cp
 }
 
 // ReportResult updates an account's state based on the HTTP status returned by upstream.
@@ -200,6 +216,11 @@ func ResolveAPIKey(rawKey string) string {
 // DetectProvider infers the upstream AI provider from a model name or alias.
 func DetectProvider(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if prefix, _, found := strings.Cut(m, "/"); found {
+		if p, err := LookupProvider(prefix); err == nil {
+			return p.ID
+		}
+	}
 	switch {
 	case strings.HasPrefix(m, "claude") || strings.HasPrefix(m, "anthropic/"):
 		return ProviderAnthropic
@@ -221,8 +242,9 @@ func DetectProvider(model string) string {
 func (p *AccountPool) HasProvider(provider string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	provider = NormalizeProvider(provider)
 	for _, a := range p.accounts {
-		if a.Enabled && (provider == "" || a.Provider == provider) {
+		if a.Enabled && a.Auth != AuthNative && (provider == "" || a.Provider == provider) {
 			return true
 		}
 	}
