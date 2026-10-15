@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hi-donwi/Agent-Brain/internal/router"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -17,8 +18,7 @@ func terminalInput(cmd *cobra.Command) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return isatty.IsTerminal(file.Fd()) || isatty.IsCygwinTerminal(file.Fd())
 }
 
 type accountPrompts struct {
@@ -69,26 +69,30 @@ func (p accountPrompts) choose(label string, options []string) (string, error) {
 
 func accountWizard(cmd *cobra.Command, a *router.Account) error {
 	p := accountPrompts{bufio.NewReader(cmd.InOrStdin()), cmd.ErrOrStderr()}
-	if a.Provider == "" {
-		var options []string
-		for _, provider := range router.Providers() {
-			options = append(options, provider.ID)
+	var definition router.Provider
+	var err error
+	for {
+		if a.Provider == "" {
+			var options []string
+			for _, provider := range router.Providers() {
+				options = append(options, provider.ID)
+			}
+			value, err := p.choose("Provider", options)
+			if err != nil {
+				return err
+			}
+			a.Provider = value
 		}
-		value, err := p.choose("Provider", options)
+		definition, err = router.LookupProvider(a.Provider)
 		if err != nil {
 			return err
 		}
-		a.Provider = value
-	}
-	definition, err := router.LookupProvider(a.Provider)
-	if err != nil {
-		return err
-	}
-	a.Provider = definition.ID
-	if a.Provider == "opencode" {
+		a.Provider = definition.ID
+		if a.Provider != "opencode" {
+			break
+		}
 		fmt.Fprintln(p.output, "OpenCode is a client. Select the provider account that OpenCode will use.")
 		a.Provider = ""
-		return accountWizard(cmd, a)
 	}
 	if definition.Note != "" {
 		fmt.Fprintln(p.output, definition.Note)

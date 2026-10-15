@@ -127,7 +127,10 @@ func nativeCommand(a router.Account, root string, noBrowser, status bool) (strin
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", nil, nil, err
 	}
-	env := mergeProcessEnv(os.Environ(), nil, credentialEnvKeys...)
+	env, err := accountEnvironment(root)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	var args []string
 	switch a.Provider {
 	case router.ProviderClaudeCode:
@@ -168,13 +171,11 @@ var credentialEnvKeys = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "C
 
 func mergeProcessEnv(base, overrides []string, remove ...string) []string {
 	values := make(map[string]string)
-	keys := make(map[string]string)
 	for _, entry := range base {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok {
 			canonical := strings.ToUpper(key)
 			values[canonical] = entry
-			keys[canonical] = key
 		}
 	}
 	for _, key := range remove {
@@ -191,6 +192,23 @@ func mergeProcessEnv(base, overrides []string, remove ...string) []string {
 		result = append(result, entry)
 	}
 	return result
+}
+
+func accountEnvironment(root string) ([]string, error) {
+	remove := append([]string(nil), credentialEnvKeys...)
+	remove = append(remove, "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_PROFILE", "ANTHROPIC_MODEL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL")
+	cfg, err := router.LoadRouterConfig(filepath.Join(root, "accounts.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range cfg.Accounts {
+		for _, ref := range []string{a.APIKey, a.BridgeKey} {
+			if name, ok := strings.CutPrefix(ref, "env:"); ok {
+				remove = append(remove, name)
+			}
+		}
+	}
+	return mergeProcessEnv(os.Environ(), nil, remove...), nil
 }
 
 func openBrowser(ctx context.Context, url string) error {
@@ -263,13 +281,7 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 		command := exec.CommandContext(ctx, tool, args...)
 		command.Env = env
 		data, err := command.CombinedOutput()
-		text := strings.ToLower(string(data))
-		var status struct {
-			LoggedIn      bool `json:"loggedIn"`
-			LoggedInSnake bool `json:"logged_in"`
-		}
-		_ = json.Unmarshal(data, &status)
-		if err != nil || strings.Contains(text, "not logged") || strings.Contains(text, "not authenticated") || !(strings.Contains(text, "logged in") || strings.Contains(text, "authenticated") || status.LoggedIn || status.LoggedInSnake) {
+		if err != nil || !nativeAuthenticated(data) {
 			return a, fmt.Errorf("native account is not authenticated; run accounts login")
 		}
 		a.CLIReady = true
@@ -297,8 +309,12 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 		return a, err
 	}
 	path := "/v1/models"
-	if a.Provider == router.ProviderGemini {
+	geminiDiscovery := a.Provider == router.ProviderGemini || (a.Supports(router.ProtocolGemini) && !a.Supports(router.ProtocolChat) && !a.Supports(router.ProtocolResponses) && !a.Supports(router.ProtocolMessages))
+	if geminiDiscovery {
 		path = "/v1beta/models"
+	}
+	if a.Provider == router.ProviderDeepSeek {
+		path = "/models"
 	}
 	if strings.HasSuffix(strings.TrimRight(endpoint, "/"), "/v1") {
 		path = strings.TrimPrefix(path, "/v1")
@@ -312,11 +328,11 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 		return a, err
 	}
 	if key != "" {
-		switch a.Provider {
-		case router.ProviderAnthropic:
+		switch {
+		case (a.Provider == router.ProviderAnthropic || (a.Supports(router.ProtocolMessages) && !a.Supports(router.ProtocolChat))) && a.Auth != router.AuthOAuth:
 			req.Header.Set("x-api-key", key)
 			req.Header.Set("anthropic-version", "2023-06-01")
-		case router.ProviderGemini:
+		case geminiDiscovery && a.Auth != router.AuthOAuth:
 			req.Header.Set("x-goog-api-key", key)
 		default:
 			req.Header.Set("Authorization", "Bearer "+key)
@@ -373,4 +389,20 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 	a.Status = router.StatusActive
 	a.GatewayReady = true
 	return a, nil
+}
+
+func nativeAuthenticated(data []byte) bool {
+	var status struct {
+		LoggedIn      bool `json:"loggedIn"`
+		LoggedInSnake bool `json:"logged_in"`
+		Authenticated bool `json:"authenticated"`
+	}
+	if json.Unmarshal(data, &status) == nil {
+		return status.LoggedIn || status.LoggedInSnake || status.Authenticated
+	}
+	text := strings.ToLower(string(data))
+	if strings.Contains(text, "not logged") || strings.Contains(text, "not authenticated") {
+		return false
+	}
+	return strings.Contains(text, "logged in") || strings.Contains(text, "authenticated with") || strings.Contains(text, "authenticated as") || strings.Contains(text, "authenticated: true")
 }

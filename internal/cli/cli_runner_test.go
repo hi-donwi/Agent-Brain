@@ -40,6 +40,32 @@ func TestMergeEnvironmentRemovesInheritedCredential(t *testing.T) {
 	}
 }
 
+func TestNativeAuthenticationRequiresPositiveStatus(t *testing.T) {
+	for _, value := range []string{`{"authenticated":false}`, `{"loggedIn":false}`, "Not authenticated", "unknown status"} {
+		if nativeAuthenticated([]byte(value)) {
+			t.Fatalf("unauthenticated result accepted: %s", value)
+		}
+	}
+	for _, value := range []string{`{"loggedIn":true}`, "Logged in using ChatGPT", "Authenticated with API key"} {
+		if !nativeAuthenticated([]byte(value)) {
+			t.Fatalf("authenticated result rejected: %s", value)
+		}
+	}
+}
+
+func TestNullInputIsNotAnInteractiveTerminal(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	cmd := newAccountsCmd()
+	cmd.SetIn(f)
+	if terminalInput(cmd) {
+		t.Fatal("null input was mistaken for an interactive terminal")
+	}
+}
+
 func TestRunListProfiles(t *testing.T) {
 	tempBase := t.TempDir()
 

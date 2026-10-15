@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/hi-donwi/Agent-Brain/internal/router"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hi-donwi/Agent-Brain/internal/router"
 )
 
 func TestOpenCodeLaunchUsesExplicitProviderAndScopedCredential(t *testing.T) {
@@ -23,6 +26,23 @@ func TestOpenCodeLaunchUsesExplicitProviderAndScopedCredential(t *testing.T) {
 	}
 	if config["model"] != "brain/openai/gpt-test" || !strings.Contains(strings.Join(plan.Env, "\n"), "BRAIN_CLIENT_KEY=scoped-token") || strings.Contains(strings.Join(plan.Env, "\n"), "fake-upstream") {
 		t.Fatalf("invalid routed client configuration: %v", config)
+	}
+}
+
+func TestLauncherDoesNotInheritOtherRegisteredAISecrets(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("OTHER_PROVIDER_SECRET", "fake-other-secret")
+	s := router.AccountService{Path: filepath.Join(root, "accounts.yaml")}
+	if _, err := s.Add(context.Background(), router.Account{Name: "other", Provider: router.ProviderAnthropic, APIKey: "env:OTHER_PROVIDER_SECRET"}); err != nil {
+		t.Fatal(err)
+	}
+	a := router.Account{ID: "one", Provider: router.ProviderOpenAI, Models: []string{"model"}}
+	plan, err := buildLaunchPlan("opencode", a, root, "http://127.0.0.1:52140", "scoped", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(plan.Env, "\n"), "OTHER_PROVIDER_SECRET=") {
+		t.Fatal("unrelated provider credential inherited by the selected coding client")
 	}
 }
 

@@ -14,7 +14,11 @@ import (
 type launchPlan struct{ Args, Env []string }
 
 func buildLaunchPlan(tool string, a router.Account, root, gatewayURL, token string, direct bool, args []string) (launchPlan, error) {
-	plan := launchPlan{Args: args, Env: mergeProcessEnv(os.Environ(), nil, credentialEnvKeys...)}
+	baseEnv, err := accountEnvironment(root)
+	if err != nil {
+		return launchPlan{}, err
+	}
+	plan := launchPlan{Args: args, Env: baseEnv}
 	dir := profileDirectory(root, a)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return plan, err
@@ -90,6 +94,9 @@ func buildLaunchPlan(tool string, a router.Account, root, gatewayURL, token stri
 			return plan, fmt.Errorf("selected account does not support Responses")
 		}
 		overrides := []string{"-c", `model_provider="brain"`, "-c", `model_providers.brain.name="Brain"`, "-c", "model_providers.brain.base_url=" + strconv.Quote(base), "-c", `model_providers.brain.env_key="BRAIN_CLIENT_KEY"`, "-c", `model_providers.brain.wire_api="responses"`, "-c", `model_providers.brain.requires_openai_auth=false`, "-c", `model_providers.brain.supports_websockets=false`}
+		if model != "" && !toolHasModel(args) {
+			overrides = append(overrides, "-c", "model="+strconv.Quote(qualified))
+		}
 		plan.Args = append(overrides, args...)
 	case "opencode":
 		npm := "@ai-sdk/openai-compatible"
@@ -158,4 +165,13 @@ func getToolProfileEnv(tool, account, dir string) []string {
 		return []string{"XDG_CONFIG_HOME=" + filepath.Join(dir, "config"), "XDG_DATA_HOME=" + filepath.Join(dir, "data"), "XDG_STATE_HOME=" + filepath.Join(dir, "state")}
 	}
 	return nil
+}
+
+func toolHasModel(args []string) bool {
+	for _, arg := range args {
+		if arg == "--model" || arg == "-m" || strings.HasPrefix(arg, "--model=") {
+			return true
+		}
+	}
+	return false
 }
