@@ -55,12 +55,14 @@ type Account struct {
 	Headers          map[string]string `json:"-" yaml:"headers,omitempty"`
 	Auth             string            `json:"auth,omitempty" yaml:"auth,omitempty"`
 	Models           []string          `json:"models,omitempty" yaml:"models,omitempty"`
+	DiscoveredModels []string          `json:"discovered_models,omitempty" yaml:"discovered_models,omitempty"`
 	Protocols        []string          `json:"protocols,omitempty" yaml:"protocols,omitempty"`
 	CLIReady         bool              `json:"cli_ready" yaml:"cli_ready,omitempty"`
 	GatewayReady     bool              `json:"gateway_ready" yaml:"gateway_ready,omitempty"`
 	BridgeURL        string            `json:"bridge_url,omitempty" yaml:"bridge_url,omitempty"`
 	BridgeKey        string            `json:"-" yaml:"bridge_key,omitempty"`
 	BridgeCredential string            `json:"bridge_credential,omitempty" yaml:"bridge_credential,omitempty"`
+	ManagedBridge    bool              `json:"managed_bridge,omitempty" yaml:"managed_bridge,omitempty"`
 }
 
 // RouterConfig holds settings for multi-account routing, auto-fallback, and token saver.

@@ -166,6 +166,7 @@ func copyAccount(a *Account) *Account {
 	cp := *a
 	cp.Headers = maps.Clone(a.Headers)
 	cp.Models = append([]string(nil), a.Models...)
+	cp.DiscoveredModels = append([]string(nil), a.DiscoveredModels...)
 	cp.Protocols = append([]string(nil), a.Protocols...)
 	return &cp
 }

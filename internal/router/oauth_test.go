@@ -52,3 +52,29 @@ func TestBridgeRefusesSharedCredentials(t *testing.T) {
 		t.Fatal("shared bridge accepted as a pinned account")
 	}
 }
+
+func TestBridgeModelsComeFromTheBoundCredential(t *testing.T) {
+	modelsCalled := false
+	b := BridgeClient{URL: "http://127.0.0.1:8317/v8/management", Key: "fake", Client: &http.Client{Transport: auditTransport(func(r *http.Request) (*http.Response, error) {
+		body := `{ "config-version":8,"plugins":{"enabled":false}}`
+		switch r.URL.Path {
+		case "/v8/management/credentials":
+			body = `{"files":[{"id":"identity-one","provider":"antigravity","status":"ready"}]}`
+		case "/v8/management/credentials/models":
+			if r.URL.Query().Get("name") != "identity-one" {
+				t.Error("models requested for a different identity")
+			}
+			modelsCalled = true
+			body = `{"models":[{"id":"model-b"},{"id":"model-a"},{"id":"model-b"}]}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}}
+	models, err := b.Models(context.Background(), ProviderAntigravity, "identity-one")
+	if err != nil || strings.Join(models, ",") != "model-a,model-b" || !modelsCalled {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+	modelsCalled = false
+	if _, err = b.Models(context.Background(), ProviderAntigravity, "different"); err == nil || modelsCalled {
+		t.Fatal("identity mismatch did not block model discovery")
+	}
+}

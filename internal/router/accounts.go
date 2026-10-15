@@ -76,6 +76,9 @@ func validateAccount(a *Account) error {
 	if a.Auth == AuthNative && a.Provider != ProviderClaudeCode && a.Provider != ProviderCodex && !(a.Provider == "cursor" && a.Name == "default") {
 		return fmt.Errorf("native account isolation is unavailable for this provider")
 	}
+	if a.ManagedBridge && a.Auth != AuthOAuth {
+		return fmt.Errorf("managed bridges require OAuth authentication")
+	}
 	if a.Auth == AuthOAuth {
 		if a.BridgeURL == "" || a.BridgeKey == "" || a.BaseURL == "" || a.APIKey == "" {
 			return fmt.Errorf("OAuth requires a dedicated local CLIProxyAPI v8 endpoint, --bridge-url, --bridge-key, --base-url, and --key")
@@ -120,20 +123,22 @@ func validateAccount(a *Account) error {
 
 // Add creates a new identity; it never silently replaces a provider/name pair.
 func (s AccountService) Add(ctx context.Context, account Account) (Account, error) {
-	if err := validateAccount(&account); err != nil {
-		return Account{}, err
-	}
 	account.ID = uuid.NewString()
-	account.Enabled = true
-	account.Status = StatusConfigured
-	account.GatewayReady = false
-	account.CLIReady = false
-	if account.Auth == AuthNative || account.Auth == AuthOAuth {
-		account.Status = StatusPending
-		account.CLIReady = false
-		account.GatewayReady = false
-	}
 	err := UpdateRouterConfig(ctx, s.Path, func(cfg *RouterConfig) error {
+		if account.ManagedBridge {
+			if err := prepareManagedAccount(&account, cfg.Accounts); err != nil {
+				return err
+			}
+		}
+		if err := validateAccount(&account); err != nil {
+			return err
+		}
+		account.Enabled = true
+		account.Status = StatusConfigured
+		account.GatewayReady, account.CLIReady = false, false
+		if account.Auth == AuthNative || account.Auth == AuthOAuth {
+			account.Status = StatusPending
+		}
 		for _, existing := range cfg.Accounts {
 			if existing.Reference() == account.Reference() {
 				return fmt.Errorf("account %s already exists; use accounts login or choose another name", account.Reference())

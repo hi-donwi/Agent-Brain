@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -116,6 +117,41 @@ func (b BridgeClient) Verify(ctx context.Context, provider, expected string) (st
 		return "", fmt.Errorf("bridge identity changed; reconnect this account explicitly")
 	}
 	return f.ID, nil
+}
+
+// Check verifies the management contract without requiring a logged-in identity.
+func (b BridgeClient) Check(ctx context.Context) error { return b.verifyConfiguration(ctx) }
+
+// Models reads the bound credential's catalog, never the bridge's global catalog.
+func (b BridgeClient) Models(ctx context.Context, provider, expected string) ([]string, error) {
+	id, err := b.Verify(ctx, provider, expected)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := b.request(ctx, http.MethodGet, "/credentials/models?name="+url.QueryEscape(id), &response); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var models []string
+	for _, model := range response.Models {
+		if model.ID == "" || len(model.ID) > 512 || strings.ContainsAny(model.ID, "\r\n\x00\t ") {
+			return nil, fmt.Errorf("bridge returned an invalid model ID")
+		}
+		if !seen[model.ID] {
+			models = append(models, model.ID)
+			seen[model.ID] = true
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models are available for this account; retry accounts models --refresh after the provider finishes registering it")
+	}
+	sort.Strings(models)
+	return models, nil
 }
 
 // Login prints/opens only a validated provider authorization URL, then verifies identity.

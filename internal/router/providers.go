@@ -33,10 +33,10 @@ type Provider struct {
 // Providers returns the supported integrations and their explicit prerequisites.
 func Providers() []Provider {
 	return []Provider{
-		{ProviderAntigravity, "Antigravity", []string{AuthOAuth}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini}, "", "", "agy", "Requires a dedicated local CLIProxyAPI v8 endpoint per account; native Google session isolation is unverified"},
+		{ProviderAntigravity, "Antigravity", []string{AuthOAuth}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini}, "", "", "agy", "Automatic private OAuth bridge per account; native Google session isolation is unverified"},
 		{ProviderGemini, "Google AI Studio", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolGemini, ProtocolEmbeddings}, "https://generativelanguage.googleapis.com", "https://aistudio.google.com/apikey", "", "Gemini Developer API keys; separate from Antigravity sign-in"},
 		{ProviderClaudeCode, "Claude Code subscription", []string{AuthNative}, nil, "", "", "claude", "Official CLI only; use Anthropic API for gateway inference"},
-		{ProviderCodex, "Codex / ChatGPT", []string{AuthNative, AuthOAuth}, []string{ProtocolChat, ProtocolResponses}, "", "", "codex", "Native CLI or dedicated local OAuth bridge; ChatGPT plan access is separate from OpenAI API billing"},
+		{ProviderCodex, "Codex / ChatGPT", []string{AuthNative, AuthOAuth}, []string{ProtocolChat, ProtocolResponses}, "", "", "codex", "Native CLI or automatic private OAuth bridge; ChatGPT plan access is separate from OpenAI API billing"},
 		{ProviderOpenAI, "OpenAI API", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolResponses, ProtocolEmbeddings}, "https://api.openai.com", "https://platform.openai.com/api-keys", "", ""},
 		{ProviderAnthropic, "Anthropic API", []string{AuthAPIKey}, []string{ProtocolMessages}, "https://api.anthropic.com", "https://platform.claude.com/settings/keys", "", ""},
 		{"cursor", "Cursor", []string{AuthAPIKey, AuthNative}, nil, "", "https://cursor.com/dashboard", "cursor-agent", "Per-account Cursor user API keys; browser login supports only the default native session, not isolated gateway accounts"},
