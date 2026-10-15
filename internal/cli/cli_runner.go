@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,16 +184,31 @@ Subcommands & Examples:
 				baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 				openAIBase := fmt.Sprintf("http://127.0.0.1:%d/v1", port)
 
-				injected := []string{
-					"ANTHROPIC_BASE_URL=" + baseURL,
-					"ANTHROPIC_API_KEY=" + token,
-					"OPENAI_BASE_URL=" + openAIBase,
-					"OPENAI_API_BASE=" + openAIBase,
-					"OPENAI_API_KEY=" + token,
-					"GEMINI_API_BASE=" + baseURL,
+				// Probe gateway status
+				healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", port)
+				httpClient := &http.Client{Timeout: 300 * time.Millisecond}
+				resp, err := httpClient.Get(healthURL)
+				gatewayOnline := err == nil && resp.StatusCode == http.StatusOK
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
 				}
-				childEnv = append(childEnv, injected...)
-				fmt.Fprintf(os.Stderr, "🧠 [Agent-Brain] Routing %s through http://127.0.0.1:%d (Multi-Account & Token-Saver active)\n", tool, port)
+
+				if gatewayOnline {
+					injected := []string{
+						"ANTHROPIC_BASE_URL=" + baseURL,
+						"ANTHROPIC_API_KEY=" + token,
+						"OPENAI_BASE_URL=" + openAIBase,
+						"OPENAI_API_BASE=" + openAIBase,
+						"OPENAI_API_KEY=" + token,
+						"GEMINI_API_BASE=" + baseURL,
+						"GOOGLE_GEMINI_BASE_URL=" + baseURL,
+						"GEMINI_API_KEY=" + token,
+					}
+					childEnv = append(childEnv, injected...)
+					fmt.Fprintf(os.Stderr, "🧠 [Agent-Brain] Router Gateway: ● CONNECTED (127.0.0.1:%d | Multi-Account & Token-Saver active)\n", port)
+				} else {
+					fmt.Fprintf(os.Stderr, "ℹ️  [Agent-Brain] Router Gateway: ○ OFFLINE (start 'brain serve' to enable 429 failover). Running in direct account mode...\n")
+				}
 			}
 
 			childCmd.Env = childEnv
