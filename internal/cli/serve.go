@@ -47,10 +47,11 @@ func defaultServeDeps() ServeDeps {
 
 func newServeCmd(deps ServeDeps) *cobra.Command {
 	var (
-		port         int
-		profile      string
-		allowRemote  bool
-		recordTraces bool
+		port                 int
+		profile              string
+		allowRemote          bool
+		recordTraces         bool
+		cloudOnly, localOnly bool
 	)
 
 	cmd := &cobra.Command{
@@ -65,6 +66,9 @@ to ~/.lokal/serve.token with mode 0600.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cloudOnly && localOnly {
+				return fmt.Errorf("cannot combine --cloud-only and --local-only")
+			}
 			ctx := cmd.Context()
 
 			layout, err := deps.ResolveHome()
@@ -81,9 +85,12 @@ to ~/.lokal/serve.token with mode 0600.`,
 				return fmt.Errorf("initialize bearer token: %w", err)
 			}
 
-			adapter, err := deps.ResolveAdapter()
-			if err != nil {
-				return fmt.Errorf("initialize backend adapter: %w", err)
+			var adapter backend.Adapter
+			if !cloudOnly {
+				adapter, err = deps.ResolveAdapter()
+				if err != nil {
+					return fmt.Errorf("initialize backend adapter: %w", err)
+				}
 			}
 
 			// Load user config or fall back to default
@@ -115,7 +122,13 @@ to ~/.lokal/serve.token with mode 0600.`,
 
 			// Load multi-account router configuration
 			routerPath := filepath.Join(layout.Root, "accounts.yaml")
-			routerCfg, _ := router.LoadRouterConfig(routerPath)
+			routerCfg := router.DefaultRouterConfig()
+			if !localOnly {
+				routerCfg, err = router.LoadRouterConfig(routerPath)
+				if err != nil {
+					return fmt.Errorf("load provider accounts: %w", err)
+				}
+			}
 			accountPool := router.NewAccountPool(routerCfg)
 
 			srv, err := gateway.NewServer(gateway.ServerConfig{
@@ -134,14 +147,15 @@ to ~/.lokal/serve.token with mode 0600.`,
 				return fmt.Errorf("configure gateway server: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "🧠 Agent-Brain gateway starting on http://%s\n", addr)
-			fmt.Fprintf(cmd.OutOrStdout(), "Bearer token:    %s (saved in %s)\n", token, layout.Token)
+			fmt.Fprintf(cmd.OutOrStdout(), "Agent-Brain gateway starting on http://%s\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "Bearer token:    stored privately in %s\n", layout.Token)
 			fmt.Fprintf(cmd.OutOrStdout(), "OpenAI endpoint: http://%s/v1\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "Responses route: http://%s/v1/responses\n", addr)
 			fmt.Fprintf(cmd.OutOrStdout(), "Anthropic route: http://%s/v1/messages\n", addr)
 			fmt.Fprintf(cmd.OutOrStdout(), "Gemini route:    http://%s/v1beta\n", addr)
 			fmt.Fprintf(cmd.OutOrStdout(), "Healthcheck:     http://%s/healthz\n", addr)
 			if accountPool != nil && accountPool.HasAccounts() {
-				fmt.Fprintf(cmd.OutOrStdout(), "AI Router:       ● ACTIVE (%d accounts, strategy: %s, token-saver: %v)\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "AI Router:       ACTIVE (%d accounts, strategy: %s, token-saver: %v)\n",
 					len(accountPool.ListAccounts()), routerCfg.Strategy, routerCfg.TokenSaver)
 			}
 			if recordTraces {
@@ -157,6 +171,7 @@ to ~/.lokal/serve.token with mode 0600.`,
 
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sigChan)
 
 			select {
 			case <-ctx.Done():
@@ -177,6 +192,8 @@ to ~/.lokal/serve.token with mode 0600.`,
 	cmd.Flags().StringVar(&profile, "profile", "", "override hardware profile (tiny, standard, workstation)")
 	cmd.Flags().BoolVar(&allowRemote, "allow-remote", false, "allow non-loopback connections (0.0.0.0)")
 	cmd.Flags().BoolVar(&recordTraces, "trace", false, "record prompt and response traces to ~/.lokal/traces/")
+	cmd.Flags().BoolVar(&cloudOnly, "cloud-only", false, "Serve provider accounts without initializing a local inference backend")
+	cmd.Flags().BoolVar(&localOnly, "local-only", false, "Serve only the configured local backend; ignore cloud accounts")
 
 	return cmd
 }
