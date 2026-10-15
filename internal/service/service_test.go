@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/service"
+	"github.com/hi-donwi/Agent-Brain/internal/service"
 )
 
 func TestService_UnitPath(t *testing.T) {

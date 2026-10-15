@@ -1,4 +1,4 @@
-module github.com/hi-donwi/Agent-Local
+module github.com/hi-donwi/Agent-Brain
 
 go 1.26.0
 

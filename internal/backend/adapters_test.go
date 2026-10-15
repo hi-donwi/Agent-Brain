@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
 )
 
 func TestRemoteAdapter_Contract(t *testing.T) {

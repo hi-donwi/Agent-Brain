@@ -7,12 +7,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/catalog"
-	"github.com/hi-donwi/Agent-Local/internal/doctor"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	"github.com/hi-donwi/Agent-Local/internal/hw"
-	"github.com/hi-donwi/Agent-Local/internal/setup"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/catalog"
+	"github.com/hi-donwi/Agent-Brain/internal/doctor"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/hw"
+	"github.com/hi-donwi/Agent-Brain/internal/setup"
 	"github.com/spf13/cobra"
 )
 

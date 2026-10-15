@@ -8,23 +8,20 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hi-donwi/Agent-Local/internal/doctor"
+	"github.com/hi-donwi/Agent-Brain/internal/doctor"
 	"github.com/spf13/cobra"
 )
 
-// NewRootCmd builds the full lokal command tree.
+// NewRootCmd builds the full brain command tree.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "lokal",
-		Short: "lokal - set up and run AI on your own machine",
-		Long: `lokal sets up local inference backends, serves local models behind one
-OpenAI-compatible endpoint, indexes your files and code for retrieval, serves
-that knowledge and your skills to agents over MCP, and learns reusable skills
-from how your agents work. It is the local layer under your agents, not
-another agent.
-
-Everything stays on this machine unless you explicitly configure otherwise.
-Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
+		Use:     "brain",
+		Aliases: []string{"lokal"},
+		Short:   "brain - Central intelligence platform, AI router, and model gateway",
+		Long: `brain is the central intelligence layer for AI agents: it serves as an AI router
+supporting multi-account CLI tools (claude, codex, agy, opencode, aider) across multiple
+cloud providers with token optimization and auto-failover, coordinates local inference
+backends, indexes code and files with hybrid retrieval (RAG), and serves knowledge over MCP.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -34,6 +31,9 @@ Most commands are not implemented yet; see ROADMAP.md for what lands when.`,
 	root.AddCommand(newModelsCmd(defaultModelsDeps()))
 	root.AddCommand(newServeCmd(defaultServeDeps()))
 	root.AddCommand(newServiceCmd())
+	root.AddCommand(newAccountsCmd())
+	root.AddCommand(newRouterCmd())
+	root.AddCommand(newCliCmd())
 	root.AddCommand(newIndexCmd(defaultRagDeps()))
 	root.AddCommand(newSearchCmd(defaultRagDeps()))
 	root.AddCommand(newAskCmd(defaultRagDeps()))

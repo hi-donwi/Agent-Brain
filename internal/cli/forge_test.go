@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	"github.com/hi-donwi/Agent-Local/internal/trace"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
 func TestForgeCLI_FullCycle(t *testing.T) {

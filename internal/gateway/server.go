@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/catalog"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	"github.com/hi-donwi/Agent-Local/internal/hw"
-	"github.com/hi-donwi/Agent-Local/internal/residency"
-	"github.com/hi-donwi/Agent-Local/internal/trace"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/catalog"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/hw"
+	"github.com/hi-donwi/Agent-Brain/internal/residency"
+	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
 // DefaultPort is the default TCP port for lokal serve.

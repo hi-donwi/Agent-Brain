@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hi-donwi/Agent-Local/internal/doctor"
-	"github.com/hi-donwi/Agent-Local/internal/gateway"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	"github.com/hi-donwi/Agent-Local/internal/snippets"
+	"github.com/hi-donwi/Agent-Brain/internal/doctor"
+	"github.com/hi-donwi/Agent-Brain/internal/gateway"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/snippets"
 	"github.com/spf13/cobra"
 )
 

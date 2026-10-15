@@ -21,7 +21,7 @@ Thanks for considering a contribution to Agent-Local.
 ## Getting started
 
 ```sh
-git clone https://github.com/hi-donwi/Agent-Local.git
+git clone https://github.com/hi-donwi/Agent-Brain.git
 cd Agent-Local
 make check
 ```

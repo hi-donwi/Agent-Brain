@@ -1,77 +1,116 @@
-# Agent-Local
+# Agent-Brain
 
-**lokal** sets up and runs AI on hardware you control, a workstation or a dedicated
-headless VM that your other machines reach through a tunnel: it picks and installs a local
-inference backend and models that fit your hardware, serves them behind one
-OpenAI-compatible endpoint, indexes your files and code for retrieval with citations,
-serves that knowledge and your skills to agents over MCP, and learns reusable skills from
-how your agents work, which you review before they are used.
+**Agent-Brain** (`brain`, alias `lokal`) is the central intelligence platform and AI router
+for AI coding agents, developers, and tools in the Agent-Workspace ecosystem.
 
-lokal is the local layer under your agents, not another agent. Agent-Control, Claude
-Code, opencode, Aider, Continue, Cline, and similar tools run the loop, edit code, and
-coordinate sub-agents; lokal makes local models, knowledge, and skills good enough for
-them, and never writes to your repositories itself.
+It provides a unified bridge connecting coding CLIs (**Claude Code**, **Codex**,
+**Antigravity**, **OpenCode**, **Aider**, **Continue**) to both local models and cloud
+providers, featuring **multi-account CLI pooling**, **token optimization (RTK)**,
+**auto-failover on rate limits**, **local hybrid RAG**, and **Agent Skills over MCP**.
 
-It is one static binary. It does not run models itself; it drives the engines that do
-(Ollama, llama.cpp, LM Studio, MLX-LM, vLLM). Nothing leaves your machine unless you
-configure it to.
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AI CODING AGENTS & CLIS                         │
+│  claude code  │  codex cli  │  antigravity (agy)  │  opencode  │ aider │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ http://127.0.0.1:52140
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                              AGENT-BRAIN                               │
+│  • AI Router & Account Pool: priority, round-robin, auto-failover      │
+│  • Token Saver (RTK): real-time tool result token compression (20-40%) │
+│  • Wire Protocols: OpenAI (/v1/chat/completions) & Anthropic (/v1/msg) │
+│  • Local Memory & RAG: SQLite FTS5 + Dense Vectors                     │
+│  • MCP Server: read-only repository maps, symbols, and Agent Skills    │
+│  • Hardware Engine Control: Ollama, llama.cpp, vLLM, LM Studio         │
+└───────┬────────────────────────────────────────────────────────┬───────┘
+        │                                                        │
+        ▼ (Cloud Providers)                                      ▼ (Local Inference)
+┌──────────────────────────────────┐        ┌────────────────────────────┐
+│   Anthropic (Account Pool)       │        │   Ollama / llama.cpp       │
+│   OpenAI / Codex (Account Pool)  │        │   Apple Silicon / NVIDIA   │
+│   Google Gemini / Vertex AI      │        │   qwen2.5-coder, deepseek   │
+│   DeepSeek / OpenRouter          │        │   Zero data leaves machine │
+└──────────────────────────────────┘        └────────────────────────────┘
+```
 
-> **Status: pre-alpha (milestone M1).** Only `lokal version` is usable today. The
-> [roadmap](ROADMAP.md) lists what lands in which release.
+---
 
-## Planned commands
+## Key Features
 
-| Command | What it will do | Milestone |
-|---|---|---|
-| `lokal setup`, `lokal doctor` | Detect hardware and backends, install and pull for a profile, verify end to end | M1 |
-| `lokal serve`, `lokal service` | One local OpenAI-compatible endpoint; roles over several models within memory | M2 |
-| `lokal index`, `lokal ask`, `lokal search` | Local hybrid retrieval with `path:line` citations | M3 |
-| `lokal skills`, `lokal mcp` | Agent Skills (SKILL.md) runtime; MCP server for other agents | M4 |
-| `lokal mcp` code tools | Repo map, symbol and code search, project commands and instructions (read-only) | M5 |
-| `lokal traces`, `lokal eval` | Capture and import agent traces; measure models and skills on this hardware | M6 |
-| `lokal forge` | Learn, evaluate, and harden skill candidates from your traces | M7 |
+1. **AI Router & Multi-Account CLI**:
+   - Manage multiple accounts per provider (e.g. Work Pro, Personal, Free Tier).
+   - Dynamic selection: `priority` (subscription → cheap → free → local) or `round-robin`.
+   - Automatic failover: transparently shifts requests to the next active account when encountering HTTP 429 (Rate Limit) or quota exhaustion.
 
-Code assistance, vibe coding, and multi-agent work come from your agent host using these
-pieces: point it at `lokal serve` for models and at `lokal mcp` for knowledge and skills.
-See [ADR-0008](docs/adr/0008-local-ai-platform-agent-hosts-own-the-loop.md).
+2. **Token Saver (RTK)**:
+   - Compresses verbose tool results (`git diff`, `grep`, test logs) on-the-fly.
+   - Saves 20–40% context window tokens without losing code meaning.
 
-## Build from source
+3. **Coding CLI Launcher**:
+   - `brain cli <tool>` launches tools like `claude`, `codex`, `agy`, or `opencode` with auto-injected proxy URLs and authentication tokens.
 
+4. **Local AI & Hardware Orchestration**:
+   - Manages local inference engines (Ollama, llama.cpp, vLLM) with strict memory residency and context limits.
+
+5. **Local RAG & Code Intelligence**:
+   - Embedded SQLite FTS5 lexical + vector search over project files.
+   - AST repository mapping and symbol definitions served over stdio MCP.
+
+---
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `brain accounts list` | View configured accounts, tiers, priorities, and rate-limit cooldowns |
+| `brain accounts add <provider>` | Add a provider account (`--key`, `--tier`, `--priority`) |
+| `brain accounts remove <id>` | Delete a configured account |
+| `brain router status` | Display router health, gateway status, and account pools |
+| `brain router optimize [file]` | Benchmark Token Saver compression on diffs/logs or stdin |
+| `brain cli <tool> [args...]` | Launch a CLI tool (`claude`, `codex`, `agy`, etc.) routed through Brain |
+| `brain serve` | Start the OpenAI & Anthropic compatible loopback HTTP gateway |
+| `brain doctor` | Check hardware, backends, accounts, and diagnose issues |
+| `brain mcp` | Run read-only Model Context Protocol (MCP) server over stdio |
+| `brain repomap`, `brain symbols` | Generate repository outlines and symbol search |
+| `brain index`, `brain search` | Local hybrid RAG indexing and retrieval |
+| `brain forge` | Mine agent traces and learn reusable skills |
+
+---
+
+## Quick Start
+
+### 1. Build from Source
 Requires Go 1.26 or newer.
 
 ```sh
-git clone https://github.com/hi-donwi/Agent-Local.git
-cd Agent-Local
+git clone https://github.com/hi-donwi/Agent-Brain.git
+cd Agent-Brain
 make build
-./bin/lokal version
+./bin/brain version
 ```
 
-| Make target | Purpose |
-|---|---|
-| `make check` | Everything CI runs on each push: gofmt, tidy, vet, race tests, smoke run |
-| `make test` | Unit tests |
-| `make cross` | Static binaries for darwin, linux, and windows into `bin/` |
-| `make vulncheck` | govulncheck at a pinned version |
+### 2. Configure Accounts
+```sh
+# Add multiple provider accounts
+./bin/brain accounts add anthropic --name claude-work --key env:ANTHROPIC_WORK_KEY --tier subscription
+./bin/brain accounts add anthropic --name claude-personal --key env:ANTHROPIC_PERSONAL_KEY --tier cheap
+./bin/brain accounts add openai --name codex-team --key env:OPENAI_API_KEY --tier subscription
+```
 
-## Design
+### 3. Start Gateway & Launch CLI Tools
+```sh
+# Start background gateway
+./bin/brain serve &
 
-- [Architecture](docs/architecture.md): components, lokal home layout, request,
-  retrieval, skill, and learning paths, security model, hardware profiles.
-- [Architecture decisions](docs/adr/README.md): why Go, why orchestrate backends, why
-  SQLite, the skill format, the human promotion gate, local-only defaults, and why the
-  agent loop stays in agent hosts.
+# Launch your favorite CLI tools with routing and multi-account auto-failover
+./bin/brain cli claude
+./bin/brain cli codex
+./bin/brain cli agy
+```
 
-## Related projects
-
-- [Agent-Skills](https://github.com/hi-donwi/Agent-Skills): portable skills in the same
-  SKILL.md format lokal loads and exports.
-- [Agent-Control](https://github.com/hi-donwi/Agent-Control): agent host and web console
-  for Agent-Workspace; uses `lokal serve` for local models and `lokal mcp` for knowledge
-  and skills.
-- [Agent-Secure](https://github.com/hi-donwi/Agent-Secure): the secret and dependency
-  gate this repository's CI runs.
+---
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). lokal does not
-distribute model weights; models keep their publishers' licences.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

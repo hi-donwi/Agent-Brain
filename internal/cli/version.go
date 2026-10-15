@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hi-donwi/Agent-Local/internal/buildinfo"
+	"github.com/hi-donwi/Agent-Brain/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 

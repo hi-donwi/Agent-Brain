@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
 )
 
 func TestConfig_RoundTrip(t *testing.T) {

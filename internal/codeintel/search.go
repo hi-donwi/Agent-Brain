@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hi-donwi/Agent-Local/internal/rag"
+	"github.com/hi-donwi/Agent-Brain/internal/rag"
 )
 
 // CodeReference records a usage or reference to a symbol.

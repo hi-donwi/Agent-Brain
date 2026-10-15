@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/codeintel"
+	"github.com/hi-donwi/Agent-Brain/internal/codeintel"
 )
 
 func TestExtractSymbols_Go(t *testing.T) {

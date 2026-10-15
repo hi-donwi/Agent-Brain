@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
 	"gopkg.in/yaml.v3"
 )
 

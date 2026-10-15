@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/rag"
-	"github.com/hi-donwi/Agent-Local/internal/store"
+	"github.com/hi-donwi/Agent-Brain/internal/rag"
+	"github.com/hi-donwi/Agent-Brain/internal/store"
 )
 
 type GoldenQuery struct {

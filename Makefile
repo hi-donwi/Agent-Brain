@@ -1,7 +1,7 @@
 .PHONY: build install test race vet fmt fmt-check tidy-check cross static-check vulncheck smoke check clean release
 
-BINARY  := lokal
-PKG     := github.com/hi-donwi/Agent-Local
+BINARY  := brain
+PKG     := github.com/hi-donwi/Agent-Brain
 VERSION ?= 0.0.0-dev
 COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -23,10 +23,10 @@ GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64
 
 build:
-	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/lokal
+	go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/brain
 
 install:
-	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/lokal
+	go install -trimpath -ldflags '$(LDFLAGS)' ./cmd/brain
 
 test:
 	go test -count=1 ./...
@@ -54,7 +54,7 @@ cross:
 		os=$${p%/*}; arch=$${p#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
 		echo "-> $$os/$$arch"; \
 		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' \
-			-o bin/$(BINARY)-$$os-$$arch$$ext ./cmd/lokal || exit 1; \
+			-o bin/$(BINARY)-$$os-$$arch$$ext ./cmd/brain || exit 1; \
 	done
 
 static-check: cross

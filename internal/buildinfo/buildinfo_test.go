@@ -24,7 +24,7 @@ func TestResolvePrefersLinkerStampedValues(t *testing.T) {
 }
 
 func TestResolveFallsBackToModuleAndVCSMetadata(t *testing.T) {
-	// A `go install github.com/hi-donwi/Agent-Local/cmd/lokal@v0.2.0` build has no
+	// A `go install github.com/hi-donwi/Agent-Brain/cmd/lokal@v0.2.0` build has no
 	// ldflags, but the toolchain records the module version and VCS state.
 	bi := &debug.BuildInfo{
 		GoVersion: "go1.27.1",

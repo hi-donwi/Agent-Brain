@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/catalog"
-	"github.com/hi-donwi/Agent-Local/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/catalog"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
 )
 
 func TestServeCmd_Help(t *testing.T) {

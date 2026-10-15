@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Stamped by -ldflags "-X github.com/hi-donwi/Agent-Local/internal/buildinfo.Version=...".
+// Stamped by -ldflags "-X github.com/hi-donwi/Agent-Brain/internal/buildinfo.Version=...".
 var (
 	Version = ""
 	Commit  = ""

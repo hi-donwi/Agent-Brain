@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/store"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/store"
 )
 
 // Searcher performs hybrid semantic and lexical searches against indexed collections.

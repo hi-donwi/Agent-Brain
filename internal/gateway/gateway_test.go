@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/gateway"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	"github.com/hi-donwi/Agent-Local/internal/residency"
-	"github.com/hi-donwi/Agent-Local/internal/trace"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/gateway"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/residency"
+	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
 type mockGatewayAdapter struct {

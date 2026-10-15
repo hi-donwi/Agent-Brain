@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hi-donwi/Agent-Local/internal/hw"
+	"github.com/hi-donwi/Agent-Brain/internal/hw"
 )
 
 //go:embed models.json

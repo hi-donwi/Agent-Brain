@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/rag"
+	"github.com/hi-donwi/Agent-Brain/internal/rag"
 )
 
 func TestWalker_FilterAndIgnore(t *testing.T) {

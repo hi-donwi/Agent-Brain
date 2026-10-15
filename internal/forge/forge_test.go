@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/skills"
-	"github.com/hi-donwi/Agent-Local/internal/trace"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
 func TestForge_MineAndDraft(t *testing.T) {

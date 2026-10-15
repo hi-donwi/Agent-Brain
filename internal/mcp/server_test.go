@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	localmcp "github.com/hi-donwi/Agent-Local/internal/mcp"
-	"github.com/hi-donwi/Agent-Local/internal/rag"
-	"github.com/hi-donwi/Agent-Local/internal/skills"
-	"github.com/hi-donwi/Agent-Local/internal/store"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	localmcp "github.com/hi-donwi/Agent-Brain/internal/mcp"
+	"github.com/hi-donwi/Agent-Brain/internal/rag"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/store"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 

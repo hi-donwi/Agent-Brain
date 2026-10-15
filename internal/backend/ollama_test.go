@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
 )
 
 func TestOllama_Ping_and_Version(t *testing.T) {

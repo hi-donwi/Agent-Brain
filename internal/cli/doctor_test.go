@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/doctor"
+	"github.com/hi-donwi/Agent-Brain/internal/doctor"
 )
 
 func checksWith(sevs ...doctor.Severity) func() []doctor.Check {

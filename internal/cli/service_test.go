@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/cli"
+	"github.com/hi-donwi/Agent-Brain/internal/cli"
 )
 
 func TestServiceCommand_Tree(t *testing.T) {

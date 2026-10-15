@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/catalog"
-	"github.com/hi-donwi/Agent-Local/internal/hw"
-	"github.com/hi-donwi/Agent-Local/internal/setup"
+	"github.com/hi-donwi/Agent-Brain/internal/catalog"
+	"github.com/hi-donwi/Agent-Brain/internal/hw"
+	"github.com/hi-donwi/Agent-Brain/internal/setup"
 )
 
 const gib = 1024 * 1024 * 1024

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
 )
 
 // Evaluator benchmarks candidate skills against test fixtures.

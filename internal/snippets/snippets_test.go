@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/snippets"
+	"github.com/hi-donwi/Agent-Brain/internal/snippets"
 )
 
 func TestSnippets_All(t *testing.T) {

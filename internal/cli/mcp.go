@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hi-donwi/Agent-Local/internal/backend"
-	"github.com/hi-donwi/Agent-Local/internal/buildinfo"
-	"github.com/hi-donwi/Agent-Local/internal/home"
-	localmcp "github.com/hi-donwi/Agent-Local/internal/mcp"
-	"github.com/hi-donwi/Agent-Local/internal/rag"
-	"github.com/hi-donwi/Agent-Local/internal/skills"
-	"github.com/hi-donwi/Agent-Local/internal/store"
+	"github.com/hi-donwi/Agent-Brain/internal/backend"
+	"github.com/hi-donwi/Agent-Brain/internal/buildinfo"
+	"github.com/hi-donwi/Agent-Brain/internal/home"
+	localmcp "github.com/hi-donwi/Agent-Brain/internal/mcp"
+	"github.com/hi-donwi/Agent-Brain/internal/rag"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/store"
 	"github.com/spf13/cobra"
 )
 

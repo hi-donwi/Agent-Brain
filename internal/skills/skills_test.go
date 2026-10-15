@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hi-donwi/Agent-Local/internal/skills"
+	"github.com/hi-donwi/Agent-Brain/internal/skills"
 )
 
 func TestParseSkillMD(t *testing.T) {

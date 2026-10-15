@@ -10,7 +10,7 @@ include the version (`lokal version`), the affected command, and reproduction st
 can share safely.
 
 - Open a private security advisory:
-  `https://github.com/hi-donwi/Agent-Local/security/advisories/new`
+  `https://github.com/hi-donwi/Agent-Brain/security/advisories/new`
 
 You will receive an acknowledgement, and we will coordinate a fix and a disclosure
 timeline with you. Reporters are credited unless they prefer otherwise.
