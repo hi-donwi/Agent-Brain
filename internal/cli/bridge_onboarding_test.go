@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hi-donwi/Agent-Brain/internal/router"
@@ -164,5 +165,91 @@ func TestScriptedOAuthDefaultsPrepareWithoutDownloadingWhenLoginIsDeferred(t *te
 	}
 	if _, err = os.Stat(filepath.Join(root, "tools")); !os.IsNotExist(err) {
 		t.Fatal("--no-login installed a bridge")
+	}
+}
+
+func TestLoginWaitsForModelRegistrationAndReusesSavedIdentity(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v8/management/config":
+			io.WriteString(w, `{"config-version":8}`)
+		case "/v8/management/credentials":
+			io.WriteString(w, `{"files":[{"id":"identity-work","provider":"antigravity","status":"ready"}]}`)
+		case "/v8/management/credentials/models":
+			if attempts.Add(1) < 3 {
+				io.WriteString(w, `{"models":[]}`)
+			} else {
+				io.WriteString(w, `{"models":[{"id":"model-ready"}]}`)
+			}
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	t.Setenv("LOKAL_HOME", root)
+	service := router.AccountService{Path: filepath.Join(root, "accounts.yaml")}
+	a, err := service.Add(context.Background(), router.Account{Name: "work", Provider: router.ProviderAntigravity, Auth: router.AuthOAuth, BaseURL: server.URL, BridgeURL: server.URL + "/v8/management", APIKey: "fake-key", BridgeKey: "fake-management"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Update(context.Background(), a.ID, func(a *router.Account) error { a.BridgeCredential = "identity-work"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newAccountsCmd()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"login", a.Reference(), "--no-browser"})
+	if err = cmd.Execute(); err != nil {
+		t.Fatalf("successful login failed before models registered: %v", err)
+	}
+	saved, err := service.Find(a.ID)
+	if err != nil || !saved.GatewayReady || len(saved.Models) != 1 || saved.Models[0] != "model-ready" {
+		t.Fatalf("discovery did not finish: %v", err)
+	}
+	if !strings.Contains(output.String(), "Waiting") {
+		t.Fatal("model registration wait was not explained")
+	}
+}
+
+func TestAddResumesAccountWithBoundIdentityAndPendingModels(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOKAL_HOME", root)
+	service := router.AccountService{Path: filepath.Join(root, "accounts.yaml")}
+	old, err := service.Add(context.Background(), router.Account{Name: "work", Provider: router.ProviderAntigravity, Auth: router.AuthOAuth, BaseURL: "http://127.0.0.1:8317", BridgeURL: "http://127.0.0.1:8317/v8/management", APIKey: "env:TEST_INFERENCE", BridgeKey: "env:TEST_MANAGEMENT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Update(context.Background(), old.ID, func(a *router.Account) error {
+		a.ManagedBridge = true
+		a.BridgeCredential = "identity-work"
+		a.Status = router.StatusConfigured
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deps := AccountDeps{Interactive: func() bool { return false }, Login: func(_ *cobra.Command, a router.Account, _ bool) (router.Account, error) {
+		if a.ID != old.ID || a.BridgeCredential != "identity-work" {
+			t.Fatal("pending catalog retry replaced the authenticated identity")
+		}
+		a.Models = []string{"model-ready"}
+		a.DiscoveredModels = a.Models
+		a.GatewayReady = true
+		a.Status = router.StatusActive
+		return a, nil
+	}}
+	cmd := newAccountsCmdWithDeps(deps)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"add", "antigravity", "--name", "work"})
+	if err = cmd.Execute(); err != nil {
+		t.Fatalf("could not resume signed-in account: %v", err)
+	}
+	saved, err := service.Find(old.ID)
+	if err != nil || !saved.GatewayReady || len(saved.Models) != 1 {
+		t.Fatalf("pending catalog was not completed: %v", err)
 	}
 }

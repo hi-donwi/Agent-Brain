@@ -149,7 +149,7 @@ func (b BridgeClient) Models(ctx context.Context, provider, expected string) ([]
 		}
 	}
 	if len(models) == 0 {
-		return nil, fmt.Errorf("no models are available for this account; retry accounts models --refresh after the provider finishes registering it")
+		return nil, ErrModelCatalogPending
 	}
 	sort.Strings(models)
 	return models, nil

@@ -112,9 +112,10 @@ func loginAccount(cmd *cobra.Command, a router.Account, noBrowser bool, root str
 			return a, err
 		}
 		a.BridgeCredential = id
-		a.GatewayReady = true
-		a.Status = router.StatusActive
-		verified, err := checkAccount(cmd.Context(), a, root, false, "")
+		a.GatewayReady = false
+		a.Status = router.StatusConfigured
+		fmt.Fprintln(cmd.ErrOrStderr(), "Signed in. Discovering the models available to this account...")
+		verified, err := checkAccount(cmd.Context(), a, root, false, "", cmd.ErrOrStderr())
 		if err != nil {
 			return a, err
 		}
@@ -128,7 +129,7 @@ func loginAccount(cmd *cobra.Command, a router.Account, noBrowser bool, root str
 		return a, nil
 	}
 	if a.Auth != router.AuthNative {
-		return checkAccount(cmd.Context(), a, root, false, "")
+		return checkAccount(cmd.Context(), a, root, false, "", cmd.ErrOrStderr())
 	}
 	tool, args, env, err := nativeCommand(a, root, noBrowser, false)
 	if err != nil {
@@ -142,7 +143,7 @@ func loginAccount(cmd *cobra.Command, a router.Account, noBrowser bool, root str
 	if err := child.Run(); err != nil {
 		return a, fmt.Errorf("native login did not complete; retry accounts login: %w", err)
 	}
-	return checkAccount(cmd.Context(), a, root, false, "")
+	return checkAccount(cmd.Context(), a, root, false, "", cmd.ErrOrStderr())
 }
 
 func nativeCommand(a router.Account, root string, noBrowser, status bool) (string, []string, []string, error) {
@@ -271,7 +272,7 @@ func newAccountTestCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		updated, err := checkAccount(cmd.Context(), a, filepath.Dir(s.Path), probe, model)
+		updated, err := checkAccount(cmd.Context(), a, filepath.Dir(s.Path), probe, model, cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -295,7 +296,7 @@ func newAccountTestCmd() *cobra.Command {
 	return cmd
 }
 
-func checkAccount(ctx context.Context, a router.Account, root string, probe bool, model string) (router.Account, error) {
+func checkAccount(ctx context.Context, a router.Account, root string, probe bool, model string, progress io.Writer) (router.Account, error) {
 	stop, err := (oauthbridge.Manager{Root: root}).Use(ctx, a)
 	if err != nil {
 		return a, err
@@ -335,7 +336,11 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 			return a, err
 		}
 		a.BridgeCredential = id
-		models, err := bridge.Models(ctx, a.Provider, id)
+		models, err := bridge.WaitModels(ctx, a.Provider, id, func() {
+			if progress != nil {
+				fmt.Fprintln(progress, "Waiting for the account's model catalog to register; refreshing automatically for up to 60 seconds...")
+			}
+		})
 		if err != nil {
 			return a, err
 		}

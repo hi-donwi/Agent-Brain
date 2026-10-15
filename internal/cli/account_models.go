@@ -41,7 +41,7 @@ func newAccountModelsCmd() *cobra.Command {
 		}
 		models := account.DiscoveredModels
 		if refresh || len(models) == 0 {
-			account, err = checkAccount(cmd.Context(), account, filepath.Dir(service.Path), false, "")
+			account, err = checkAccount(cmd.Context(), account, filepath.Dir(service.Path), false, "", cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

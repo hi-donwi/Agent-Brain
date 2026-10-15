@@ -143,7 +143,8 @@ func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
 		}
 		var added router.Account
 		existing, findErr := s.Find(a.Reference())
-		if findErr == nil && a.ManagedBridge && existing.Auth == router.AuthOAuth && !existing.GatewayReady && (existing.Status == router.StatusPending || existing.Status == router.StatusReauth) {
+		incomplete := existing.Status == router.StatusPending || existing.Status == router.StatusReauth || (existing.ManagedBridge && existing.Status == router.StatusConfigured && existing.BridgeCredential != "")
+		if findErr == nil && a.ManagedBridge && existing.Auth == router.AuthOAuth && !existing.GatewayReady && incomplete {
 			added, err = s.EnableManaged(cmd.Context(), existing.ID)
 			if err == nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Resuming incomplete account %s with automatic bridge setup.\n", added.Reference())
@@ -162,7 +163,7 @@ func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
 		if !noLogin && added.Auth != router.AuthNative && added.Auth != router.AuthOAuth && len(p.Protocols) > 0 {
 			key, keyErr := router.ResolveCredential(added.APIKey)
 			if added.Auth == router.AuthNone || (keyErr == nil && key != "") {
-				verified, discoveryErr := checkAccount(cmd.Context(), added, filepath.Dir(s.Path), false, "")
+				verified, discoveryErr := checkAccount(cmd.Context(), added, filepath.Dir(s.Path), false, "", cmd.ErrOrStderr())
 				if discoveryErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Account saved; model discovery is incomplete: %v. Retry: brain accounts models %s --refresh\n", discoveryErr, added.Reference())
 				} else {

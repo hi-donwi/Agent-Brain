@@ -69,6 +69,18 @@ completes the provider's consent. After login, Brain verifies the bound identity
 queries `/credentials/models?name=<bound-id>`, saves and displays the model IDs.
 It never substitutes a general provider catalog for that credential's catalog.
 
+The bridge registers account models asynchronously after sign-in and after its
+startup HTTP endpoint becomes reachable. Brain automatically polls that same
+credential's catalog for up to 60 seconds during add/login, model refresh and
+account verification, keeping its temporary bridge alive throughout the wait.
+A progress message explains the wait. Authentication/configuration/identity errors
+stop immediately rather than being retried as catalog delays. If the wait expires,
+Brain retains the authenticated identity without reporting gateway readiness;
+retrying add/login resumes that binding without requesting a new browser login.
+A genuinely empty provider catalog still requires checking that account's provider
+access or connectivity; Brain never fills it with unrelated static model IDs.
+
+
 The first use downloads **CLIProxyAPI v8.0.29** from its official GitHub release
 into the Brain runtime home (about 24 MB). Platform-specific SHA256 digests are
 pinned in the installer, checked before extraction, and checked again when using
