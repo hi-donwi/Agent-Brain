@@ -7,14 +7,15 @@ import (
 )
 
 const (
-	AuthAPIKey        = "api-key"
-	AuthNative        = "native"
-	AuthOAuth         = "oauth"
-	AuthNone          = "none"
-	ProtocolChat      = "chat"
-	ProtocolResponses = "responses"
-	ProtocolMessages  = "messages"
-	ProtocolGemini    = "gemini"
+	AuthAPIKey         = "api-key"
+	AuthNative         = "native"
+	AuthOAuth          = "oauth"
+	AuthNone           = "none"
+	ProtocolChat       = "chat"
+	ProtocolResponses  = "responses"
+	ProtocolMessages   = "messages"
+	ProtocolGemini     = "gemini"
+	ProtocolEmbeddings = "embeddings"
 )
 
 // Provider declares authentication and wire capabilities independently of model vendors.
@@ -33,17 +34,18 @@ type Provider struct {
 func Providers() []Provider {
 	return []Provider{
 		{ProviderAntigravity, "Antigravity", []string{AuthOAuth}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini}, "", "", "agy", "Requires a dedicated local CLIProxyAPI v8 endpoint per account; native Google session isolation is unverified"},
-		{ProviderGemini, "Google AI Studio", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolGemini}, "https://generativelanguage.googleapis.com", "https://aistudio.google.com/apikey", "", "Gemini Developer API keys; separate from Antigravity sign-in"},
+		{ProviderGemini, "Google AI Studio", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolGemini, ProtocolEmbeddings}, "https://generativelanguage.googleapis.com", "https://aistudio.google.com/apikey", "", "Gemini Developer API keys; separate from Antigravity sign-in"},
 		{ProviderClaudeCode, "Claude Code subscription", []string{AuthNative}, nil, "", "", "claude", "Official CLI only; use Anthropic API for gateway inference"},
 		{ProviderCodex, "Codex / ChatGPT", []string{AuthNative, AuthOAuth}, []string{ProtocolChat, ProtocolResponses}, "", "", "codex", "Native CLI or dedicated local OAuth bridge; ChatGPT plan access is separate from OpenAI API billing"},
-		{ProviderOpenAI, "OpenAI API", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolResponses}, "https://api.openai.com", "https://platform.openai.com/api-keys", "", ""},
+		{ProviderOpenAI, "OpenAI API", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolResponses, ProtocolEmbeddings}, "https://api.openai.com", "https://platform.openai.com/api-keys", "", ""},
 		{ProviderAnthropic, "Anthropic API", []string{AuthAPIKey}, []string{ProtocolMessages}, "https://api.anthropic.com", "https://platform.claude.com/settings/keys", "", ""},
-		{"cursor", "Cursor", []string{AuthAPIKey}, nil, "", "https://cursor.com/dashboard", "cursor-agent", "Per-account Cursor user API keys; browser login uses the official CLI and is not an isolated gateway account"},
+		{"cursor", "Cursor", []string{AuthAPIKey, AuthNative}, nil, "", "https://cursor.com/dashboard", "cursor-agent", "Per-account Cursor user API keys; browser login supports only the default native session, not isolated gateway accounts"},
 		{"opencode", "OpenCode client", nil, nil, "", "", "opencode", "Choose an underlying provider account; Brain writes an explicit custom-provider configuration"},
+		{"opencode-zen", "OpenCode service", []string{AuthAPIKey}, []string{ProtocolChat, ProtocolMessages}, "", "https://opencode.ai/auth", "", "Supply the service endpoint and supported protocols explicitly"},
 		{ProviderDeepSeek, "DeepSeek", []string{AuthAPIKey}, []string{ProtocolChat}, "https://api.deepseek.com", "https://platform.deepseek.com/api_keys", "", ""},
 		{ProviderOpenRouter, "OpenRouter", []string{AuthAPIKey}, []string{ProtocolChat}, "https://openrouter.ai/api", "https://openrouter.ai/keys", "", ""},
-		{ProviderLocal, "Local AI endpoint", []string{AuthNone, AuthAPIKey}, []string{ProtocolChat, ProtocolResponses}, "http://127.0.0.1:11434", "", "", "OpenAI-compatible local servers; native backend orchestration remains available through setup/models"},
-		{"custom", "Custom compatible provider", []string{AuthAPIKey, AuthNone}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini}, "", "", "", "Requires an explicit endpoint and protocol list"},
+		{ProviderLocal, "Local AI endpoint", []string{AuthNone, AuthAPIKey}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini, ProtocolEmbeddings}, "http://127.0.0.1:11434", "", "", "OpenAI-compatible local servers; native backend orchestration remains available through setup/models"},
+		{"custom", "Custom compatible provider", []string{AuthAPIKey, AuthNone}, []string{ProtocolChat, ProtocolResponses, ProtocolMessages, ProtocolGemini, ProtocolEmbeddings}, "", "", "", "Requires an explicit endpoint and protocol list"},
 	}
 }
 

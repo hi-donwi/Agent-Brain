@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,8 @@ func NewProxyHandler(pool *AccountPool, tokenSaver bool) *ProxyHandler {
 	return &ProxyHandler{
 		pool: pool,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout:       120 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		tokenSaver: tokenSaver,
 	}
@@ -59,6 +61,32 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 		}
 
 		tried[acc.ID] = true
+		if acc.Auth == AuthOAuth {
+			bridge := BridgeClient{URL: acc.BridgeURL, Key: acc.BridgeKey, Client: h.client}
+			if _, err := bridge.Verify(ctx, acc.Provider, acc.BridgeCredential); err != nil {
+				h.pool.ReportResult(acc.ID, 401, 0)
+				continue
+			}
+		}
+		protocol := ProtocolChat
+		switch {
+		case strings.HasPrefix(targetPath, "/v1/responses"):
+			protocol = ProtocolResponses
+		case strings.HasPrefix(targetPath, "/v1/messages"):
+			protocol = ProtocolMessages
+		case strings.HasPrefix(targetPath, "/v1beta/models/"):
+			protocol = ProtocolGemini
+		}
+		if !acc.Supports(protocol) {
+			continue
+		}
+		var requested struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &requested)
+		if len(acc.Models) > 0 && requested.Model != "" && !contains(acc.Models, requested.Model) {
+			continue
+		}
 		baseURL := acc.BaseURL
 		if baseURL == "" {
 			baseURL = definition.BaseURL
@@ -70,6 +98,14 @@ func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pin
 			return nil, acc, err
 		}
 		path := targetPath
+		if parsed, err := url.Parse(path); err == nil {
+			query := parsed.Query()
+			for _, name := range []string{"key", "api_key", "access_token"} {
+				query.Del(name)
+			}
+			parsed.RawQuery = query.Encode()
+			path = parsed.String()
+		}
 		if provider == ProviderGemini && strings.HasPrefix(path, "/v1/") {
 			path = "/v1beta/openai/" + strings.TrimPrefix(path, "/v1/")
 		}

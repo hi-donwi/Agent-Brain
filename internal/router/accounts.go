@@ -13,6 +13,7 @@ import (
 )
 
 var accountName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+var environmentName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // AccountService is shared by scripted and interactive commands.
 type AccountService struct{ Path string }
@@ -61,7 +62,18 @@ func validateAccount(a *Account) error {
 	if a.Auth == AuthAPIKey && strings.TrimSpace(a.APIKey) == "" {
 		return fmt.Errorf("credential required; use --key env:VARIABLE or --key-stdin")
 	}
-	if a.Auth == AuthNative && a.Provider != ProviderClaudeCode && a.Provider != ProviderCodex {
+	for _, ref := range []string{a.APIKey, a.BridgeKey} {
+		if strings.ContainsAny(ref, "\r\n\x00") {
+			return fmt.Errorf("credential must be a single line")
+		}
+		if name, ok := strings.CutPrefix(ref, "env:"); ok && !environmentName.MatchString(name) {
+			return fmt.Errorf("invalid credential environment reference")
+		}
+		if path, ok := strings.CutPrefix(ref, "file:"); ok && !filepath.IsAbs(path) {
+			return fmt.Errorf("credential file references must be absolute")
+		}
+	}
+	if a.Auth == AuthNative && a.Provider != ProviderClaudeCode && a.Provider != ProviderCodex && !(a.Provider == "cursor" && a.Name == "default") {
 		return fmt.Errorf("native account isolation is unavailable for this provider")
 	}
 	if a.Auth == AuthOAuth {
@@ -74,8 +86,11 @@ func validateAccount(a *Account) error {
 		if err := ValidateLoopbackEndpoint(a.BaseURL); err != nil {
 			return err
 		}
+		if strings.TrimRight(a.BridgeURL, "/") != strings.TrimSuffix(strings.TrimRight(a.BaseURL, "/"), "/v1")+"/v8/management" {
+			return fmt.Errorf("inference and management URLs must refer to the same dedicated bridge")
+		}
 	}
-	if a.Provider == "custom" && (a.BaseURL == "" || len(a.Protocols) == 0) {
+	if (a.Provider == "custom" || a.Provider == "opencode-zen") && (a.BaseURL == "" || len(a.Protocols) == 0) {
 		return fmt.Errorf("custom provider requires --base-url and --protocols")
 	}
 	if a.BaseURL != "" {

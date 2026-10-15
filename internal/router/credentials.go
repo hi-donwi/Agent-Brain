@@ -3,6 +3,7 @@ package router
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -20,6 +21,9 @@ func ResolveCredential(ref string) (string, error) {
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 65536 {
 			return "", fmt.Errorf("credential file is unavailable or invalid")
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+			return "", fmt.Errorf("credential file must be readable only by its owner")
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {

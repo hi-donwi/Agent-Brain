@@ -51,6 +51,9 @@ func TestAccountServiceValidatesAndMigrates(t *testing.T) {
 		{Name: "work", Provider: ProviderOpenAI},
 		{Name: "work", Provider: ProviderOpenAI, APIKey: "fake", BaseURL: "http://remote.example"},
 		{Name: "work", Provider: ProviderClaudeCode, Auth: AuthOAuth},
+		{Name: "work", Provider: ProviderOpenAI, APIKey: "env:"},
+		{Name: "work", Provider: ProviderOpenAI, APIKey: "fake\ninvalid"},
+		{Name: "work", Provider: ProviderAntigravity, Auth: AuthOAuth, APIKey: "env:INFERENCE", BridgeKey: "env:MANAGEMENT", BaseURL: "http://127.0.0.1:8317", BridgeURL: "http://127.0.0.1:8318/v8/management"},
 	} {
 		if _, err := s.Add(context.Background(), a); err == nil {
 			t.Fatalf("accepted invalid account: %s/%s", a.Provider, a.Name)
