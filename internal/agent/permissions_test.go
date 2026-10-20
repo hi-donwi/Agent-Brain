@@ -151,6 +151,19 @@ func TestShellForbiddenCommandNeverComesBackAllow(t *testing.T) {
 		{Tool: ToolShell, Command: "rm", Decision: Deny},
 	}}
 	commands := []string{
+		"RM -rf /",
+		"rm/. -rf /",
+		"sort --compress-program=./rm data",
+		"PATH=. ls",
+		"LD_PRELOAD=/tmp/evil.so ls",
+		"parallel rm ::: x",
+		"chroot / rm -rf /",
+		"ninja rm",
+		"just rm",
+		"systemd-run rm",
+		"bash -lc 'rm -rf /'",
+		"tar --to-command=rm a b",
+		"rsync --rsync-path=rm host:/x /tmp/x",
 		"if rm -rf /; then true; fi",
 		"while rm -rf /; do break; done",
 		"until rm -rf /; do break; done",
@@ -179,6 +192,20 @@ func TestShellForbiddenCommandNeverComesBackAllow(t *testing.T) {
 	}
 }
 
+func TestShellRulesAllTakeTheStrictestDecision(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Decision: Allow},
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+	}}
+	if got := decide(t, p, ToolShell, "", "rm -rf /"); got != Deny {
+		t.Errorf("shell %q = %q, want deny", "rm -rf /", got)
+	}
+	if got := decide(t, p, ToolShell, "", "docker run img ls"); got != Ask {
+		t.Errorf("shell %q = %q, want ask", "docker run img ls", got)
+	}
+}
+
 func TestShellAllowNeedsAPlainCommand(t *testing.T) {
 	root := t.TempDir()
 	p := Policy{Root: root, Default: Allow, Rules: []Rule{
@@ -192,6 +219,8 @@ func TestShellAllowNeedsAPlainCommand(t *testing.T) {
 		"ls *.go",
 		"echo $HOME",
 		"rm -rf /",
+		"PATH=. ls",
+		"LD_PRELOAD=/tmp/evil.so ls",
 	}
 	for _, cmd := range cases {
 		if got := decide(t, p, ToolShell, "", cmd); got == Allow {

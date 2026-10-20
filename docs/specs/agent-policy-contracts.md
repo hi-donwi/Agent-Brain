@@ -66,26 +66,30 @@ character.
 5. A command containing `$`, a backtick, `<`, or `>` is never better than ask: the engine
    cannot read what the expansion produces.
 6. `allow` is the answer only for a plain command: one command word, inert arguments,
-   nothing in front of it but assignments, and no flag that carries a command or a piece
-   of code. A command the engine cannot read that way is never better than ask, whatever
-   the default says.
+   nothing in front of it but assignments that do not change the runtime, and no flag
+   that carries a command or a piece of code. A command the engine cannot read that way
+   is never better than ask, whatever the default says.
 7. `allow` also needs a rule that allows the command, or a program that only reads and
-   prints (`ls`, `cat`, `grep`, ...). A program that runs other programs (`docker`, `ssh`,
-   `make`, a shell, an interpreter) is never better than ask when no rule allows it.
+   prints (`ls`, `cat`, `grep`, ...). A rule that allows every shell command names no
+   program, so the engine applies what it knows: a program that runs other programs
+   (`docker`, `ssh`, `make`, a shell, an interpreter) is never answered allow on its name.
 8. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. The
-   first word of a rule and of a command are compared by their base name, so a rule on
-   `rm` also covers `/bin/rm`.
+   first word of a rule and of a command are compared by their base name and without
+   regard to case, so a rule on `rm` also covers `/bin/rm` and `RM`.
 9. The command of a part is the first word that is neither an assignment nor a control
    word, so `FOO=bar rm` names `rm`.
 10. A rule that denies a command also applies to the command a part hides: the command
     behind a launcher (`xargs rm`), the command behind a flag that carries one
-    (`sh -c 'rm -rf /'`), and the command inside a quoted payload. A rule that only
-    tightens the answer costs nothing, so it is applied even where the engine would not
-    allow the command.
+    (`sh -c 'rm -rf /'`), and the command inside such a payload. A quoted argument to an
+    ordinary command is not a command (`echo 'rm -rf /'`). A rule that only tightens the
+    answer costs nothing, so it is applied even where the engine would not allow the
+    command.
 
 Deny rules on shell commands are guardrails, not a sandbox. The engine answers allow only
-for a command it can read as one plain command; every other command falls to ask. The
-host must still isolate execution.
+for a command it can read as one plain command; every other command falls to ask. A
+program the policy allows may run other programs, and the engine cannot see inside it: a
+`git` alias can run a command the policy denies. A rule that allows a program is the
+operator's trust in that program. The host must still isolate execution.
 
 ### Layering
 

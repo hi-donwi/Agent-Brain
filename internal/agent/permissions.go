@@ -265,6 +265,17 @@ func resolveExisting(abs string) (string, bool) {
 }
 
 func (p Policy) decideShell(command string) Decision {
+	return p.decideShellDepth(command, 0)
+}
+
+// maxShellDepth bounds how deep the engine follows the commands inside quoted
+// payloads, and maxShellPayload the size of a payload it follows at all.
+const (
+	maxShellDepth   = 8
+	maxShellPayload = 64 * 1024
+)
+
+func (p Policy) decideShellDepth(command string, depth int) Decision {
 	segments := splitShell(spliceContinuations(command))
 	if len(segments) == 0 {
 		return stricter(p.defaultDecision(), Ask)
@@ -272,7 +283,7 @@ func (p Policy) decideShell(command string) Decision {
 	rules := p.shellRuleList()
 	out := Allow
 	for _, seg := range segments {
-		out = stricter(out, p.decideShellSegment(seg, rules))
+		out = stricter(out, p.decideShellSegment(seg, rules, depth))
 	}
 	if hasUnanalyzableSyntax(command) {
 		out = stricter(out, Ask)
@@ -284,7 +295,7 @@ func (p Policy) decideShell(command string) Decision {
 // can read the segment as one plain command the policy allows; a segment it cannot read
 // that way is never better than ask, and a rule on a command the segment hides is still
 // applied, because a rule that only tightens the answer costs nothing.
-func (p Policy) decideShellSegment(seg string, rules []shellRule) Decision {
+func (p Policy) decideShellSegment(seg string, rules []shellRule, depth int) Decision {
 	words, unterminated := scanShell(seg)
 	if len(words) == 0 {
 		return p.defaultDecision()
@@ -297,7 +308,7 @@ func (p Policy) decideShellSegment(seg string, rules []shellRule) Decision {
 	}
 	plain := plainCommand(words, head)
 
-	if d, ok := p.denyDecision(rules, words, head, headName); ok {
+	if d, ok := p.denyDecision(rules, words, head, headName, depth); ok {
 		return d
 	}
 
@@ -306,8 +317,20 @@ func (p Policy) decideShellSegment(seg string, rules []shellRule) Decision {
 
 	var out Decision
 	switch {
+	case allMatched && headMatched:
+		// The operator named this program, so the engine trusts it.
+		out = stricter(allDecision, headDecision)
+		if out == Allow && !plain {
+			out = Ask
+		}
 	case allMatched:
+		// A rule that allows every shell command names no program, so the engine
+		// applies what it knows: a program that runs other programs is not allowed
+		// on its name.
 		out = allDecision
+		if out == Allow && (!plain || isShellExecutor(headName)) {
+			out = Ask
+		}
 	case headMatched:
 		out = headDecision
 		if out == Allow && !plain {
@@ -328,7 +351,7 @@ func (p Policy) decideShellSegment(seg string, rules []shellRule) Decision {
 // denyDecision reports whether a rule that denies a command matches a command the
 // segment hides: behind a launcher, behind a flag that carries a command, or inside a
 // quoted payload.
-func (p Policy) denyDecision(rules []shellRule, words []shellWord, head int, headName string) (Decision, bool) {
+func (p Policy) denyDecision(rules []shellRule, words []shellWord, head int, headName string, depth int) (Decision, bool) {
 	for _, i := range commandPositions(words, head, headName) {
 		sequence := commandSequence(words, i)
 		if len(sequence) == 0 {
@@ -337,9 +360,9 @@ func (p Policy) denyDecision(rules []shellRule, words []shellWord, head int, hea
 		if d, ok := matchShellRules(rules, sequence); ok && d == Deny {
 			return Deny, true
 		}
-		if words[i].isPayload {
+		if words[i].isPayload && depth < maxShellDepth && len(words[i].payload) <= maxShellPayload {
 			// The payload is a command of its own: judge it as one.
-			if d := p.decideShell(words[i].payload); d == Deny {
+			if d := p.decideShellDepth(words[i].payload, depth+1); d == Deny {
 				return Deny, true
 			}
 		}
@@ -355,7 +378,7 @@ func plainCommand(words []shellWord, head int) bool {
 		return false
 	}
 	for i := 0; i < head; i++ {
-		if !isAssignment(words[i].text) {
+		if !isAssignment(words[i].text) || changesRuntime(words[i].text) {
 			return false
 		}
 	}
@@ -370,7 +393,7 @@ func plainCommand(words []shellWord, head int) bool {
 		if w.mixed {
 			return false
 		}
-		if isCommandCarryingFlag(w.text) {
+		if carriesCommand(w.text) {
 			return false
 		}
 		if !w.quoted && strings.ContainsAny(w.text, "*?[{") {
@@ -404,9 +427,52 @@ var commandCarryingFlags = map[string]bool{
 	"-c": true, "-e": true, "-E": true, "-exec": true, "-execdir": true,
 	"--exec": true, "--to-command": true, "--rsync-path": true,
 	"-Command": true, "-EncodedCommand": true, "/c": true,
+	"--compress-program": true, "--eval": true,
 }
 
-func isCommandCarryingFlag(word string) bool { return commandCarryingFlags[word] }
+// carriesCommand reports whether an argument is a flag whose value is a command or a
+// piece of code. A long flag is read up to its "=", and a cluster of short flags is
+// read one flag at a time.
+func carriesCommand(arg string) bool {
+	if arg == "" || arg[0] != '-' {
+		return false
+	}
+	if strings.HasPrefix(arg, "--") {
+		name := arg
+		if i := strings.Index(arg, "="); i >= 0 {
+			name = arg[:i]
+		}
+		return commandCarryingFlags[name]
+	}
+	for i := 1; i < len(arg); i++ {
+		if commandCarryingFlags["-"+string(arg[i])] {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeAssignments are the variables that change which program runs, or how the
+// program that runs behaves.
+var runtimeAssignments = map[string]bool{
+	"BASH_ENV": true, "CDPATH": true, "ENV": true, "IFS": true, "PATH": true,
+	"PERL5OPT": true, "PERL5LIB": true, "PYTHONPATH": true, "PYTHONSTARTUP": true,
+	"SHELL": true, "RUBYLIB": true, "GIT_EXEC_PATH": true, "NODE_OPTIONS": true,
+}
+
+// changesRuntime reports whether an assignment changes which program runs, or how it
+// behaves. A command behind one of them is not the command the policy read.
+func changesRuntime(word string) bool {
+	name := word
+	if i := strings.Index(word, "="); i >= 0 {
+		name = word[:i]
+	}
+	if runtimeAssignments[name] {
+		return true
+	}
+	return strings.HasPrefix(name, "LD_") || strings.HasPrefix(name, "DYLD_") ||
+		strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "BASH_FUNC_")
+}
 
 // inertPrograms are the programs that only read and print. A request that runs one of
 // them is answered with the default; a request that runs any other program is never
@@ -493,7 +559,7 @@ func matchesShellRule(want []string, words []shellWord) bool {
 	for i := range want {
 		got := words[i].text
 		if i == 0 {
-			if commandWord(want[0]) != commandWord(got) {
+			if !sameCommand(want[0], got) {
 				return false
 			}
 			continue
@@ -626,7 +692,13 @@ func commandWord(w string) string {
 	if w == "" {
 		return ""
 	}
-	return filepath.Base(w)
+	return filepath.Base(filepath.Clean(w))
+}
+
+// sameCommand reports whether two words name the same program. The comparison folds
+// the case, because a file system may not.
+func sameCommand(a, b string) bool {
+	return strings.EqualFold(commandWord(a), commandWord(b))
 }
 
 // headPosition returns the index of the word that names the command of a segment,
@@ -714,18 +786,20 @@ var execFlags = map[string]bool{
 // shellExecutors are the programs whose arguments decide what runs. The engine cannot
 // read them, so a request that reaches one is never better than ask.
 var shellExecutors = map[string]bool{
-	"adb": true, "ansible": true, "ansible-playbook": true, "ash": true, "awk": true,
-	"bash": true, "bun": true, "bundle": true, "busybox": true, "cargo": true,
+	"adb": true, "ansible": true, "ansible-playbook": true, "ash": true, "at": true,
+	"awk": true, "bash": true, "batch": true, "bun": true, "bundle": true,
+	"busybox": true, "bwrap": true, "cargo": true, "chroot": true, "crontab": true,
 	"csh": true, "dash": true, "deno": true, "docker": true, "dotnet": true,
 	"expect": true, "fish": true, "gawk": true, "gmake": true, "go": true,
-	"gradle": true, "helm": true, "java": true, "js": true, "ksh": true,
-	"kubectl": true, "make": true, "mawk": true, "mvn": true, "mysql": true,
-	"nerdctl": true, "node": true, "npm": true, "npx": true, "perl": true,
-	"php": true, "pip": true, "pip3": true, "podman": true, "poetry": true,
-	"psql": true, "python": true, "python2": true, "python3": true, "rake": true,
-	"redis-cli": true, "rsync": true, "ruby": true, "scp": true, "sed": true,
-	"sftp": true, "sh": true, "ssh": true, "systemctl": true, "task": true,
-	"tcsh": true, "terraform": true, "uv": true, "watch": true, "yarn": true,
+	"gradle": true, "helm": true, "java": true, "js": true, "just": true,
+	"ksh": true, "kubectl": true, "make": true, "mawk": true, "mvn": true,
+	"mysql": true, "nerdctl": true, "ninja": true, "node": true, "npm": true,
+	"npx": true, "parallel": true, "perl": true, "php": true, "pip": true,
+	"pip3": true, "podman": true, "poetry": true, "psql": true, "python": true,
+	"python2": true, "python3": true, "rake": true, "redis-cli": true, "rsync": true,
+	"ruby": true, "scp": true, "sed": true, "sftp": true, "sh": true, "ssh": true,
+	"systemctl": true, "systemd-run": true, "tar": true, "task": true, "tcsh": true,
+	"terraform": true, "unbuffer": true, "uv": true, "watch": true, "yarn": true,
 	"zsh": true,
 }
 

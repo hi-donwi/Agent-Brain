@@ -61,6 +61,9 @@ func newAgentCmd() *cobra.Command {
 			}
 			p = d.Effective(p)
 		}
+		if len(command) > 32*1024 {
+			return fmt.Errorf("command must be no longer than 32 KiB")
+		}
 		decision := p.Decide(agent.Request{Tool: tool, Path: path, Command: command})
 		return json.NewEncoder(c.OutOrStdout()).Encode(map[string]interface{}{"decision": decision, "executed": false})
 	}}
