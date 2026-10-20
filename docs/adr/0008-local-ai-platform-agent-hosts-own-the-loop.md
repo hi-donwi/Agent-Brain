@@ -1,7 +1,7 @@
 # ADR-0008: lokal is the local AI platform; agent hosts own the agent loop
 
 - **Date:** 2026-10-13
-- **Status:** Accepted
+- **Status:** Accepted (amended by ADR-0013: the platform also owns read-only agent policy contracts)
 - **Deciders:** Doni Wicaksono
 - **Supersedes:** ADR-0007
 
