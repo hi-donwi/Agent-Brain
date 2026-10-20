@@ -265,7 +265,7 @@ func resolveExisting(abs string) (string, bool) {
 }
 
 func (p Policy) decideShell(command string) Decision {
-	segments := splitShell(command)
+	segments := splitShell(spliceContinuations(command))
 	if len(segments) == 0 {
 		return stricter(p.defaultDecision(), Ask)
 	}
@@ -280,115 +280,143 @@ func (p Policy) decideShell(command string) Decision {
 }
 
 // decideShellSegment judges one command segment. The command it holds can be written in
-// a way that hides the real command from a prefix match, so the segment is judged at
-// every position a command can start from, and every payload it carries is judged as a
-// command of its own. A segment that cannot be read this way is never better than ask.
+// a way that hides the real command from a prefix match, so the quoting is resolved
+// first, the segment is judged at every position a command can start from, and the
+// head of the segment is judged with the assignments and the control words in front
+// of it skipped.
 func (p Policy) decideShellSegment(seg string) Decision {
-	words, payloads, unterminated := scanShell(seg)
+	words, unterminated := scanShell(seg)
 	if len(words) == 0 {
 		return p.defaultDecision()
 	}
-	head, matched, hidden := p.shellRules(words, payloads)
-	out := head
-	if !matched {
-		out = p.defaultDecision()
+	rules := p.shellRuleList()
+	head := headPosition(words)
+	headWords := words[head:]
+	headSequence := commandSequence(words, head)
+	if len(headSequence) == 0 {
+		headSequence = headWords
 	}
-	if hidden != "" {
-		out = stricter(out, hidden)
+	headName := ""
+	if len(headSequence) > 0 {
+		headName = commandWord(headSequence[0].text)
 	}
-	if p.hasShellPrefixRules() {
-		if unterminated {
-			out = stricter(out, Ask)
+
+	prefixDecision, prefixMatched := matchShellRules(rules, headSequence)
+	allDecision, allMatched := p.shellAllDecision()
+
+	var base Decision
+	switch {
+	case allMatched && prefixMatched:
+		base = stricter(allDecision, prefixDecision)
+	case allMatched:
+		base = allDecision
+	case prefixMatched:
+		base = prefixDecision
+	default:
+		base = p.defaultDecision()
+		// A program that runs another program cannot be judged from its name alone:
+		// what runs inside it is up to its arguments, not to the policy.
+		if p.hasShellPrefixRules() && isShellExecutor(headName) {
+			base = stricter(base, Ask)
 		}
-		for _, w := range words {
-			if w.mixed {
-				out = stricter(out, Ask)
-				break
-			}
+	}
+	out := base
+
+	// A command can also start behind a launcher, behind an inline command flag, or
+	// behind an exec flag: "xargs rm" runs rm even though rm is not the first word.
+	for _, i := range commandPositions(words, head, headName) {
+		if d, ok := matchShellRules(rules, commandSequence(words, i)); ok {
+			out = stricter(out, d)
 		}
-		for _, payload := range payloads {
-			if !analyzablePayload(payload) {
-				out = stricter(out, Ask)
-				break
-			}
-		}
+	}
+	if unterminated || hasMixedWord(words) {
+		out = stricter(out, Ask)
 	}
 	return out
 }
 
-// shellRules returns the strictest decision among the shell rules that apply to the
-// head of a command, whether any such rule applied, and the strictest decision among
-// the rules that apply to a command hidden behind quoting or behind a launcher.
-func (p Policy) shellRules(words []shellWord, payloads []string) (Decision, bool, Decision) {
-	var head Decision
-	headMatched := false
-	var hidden Decision
-	setHead := func(d Decision) {
-		if !headMatched || d.rank() > head.rank() {
-			head, headMatched = d, true
-		}
-	}
-	setHidden := func(d Decision) {
-		if hidden == "" || d.rank() > hidden.rank() {
-			hidden = d
-		}
-	}
+// shellRule is a shell rule with its command prefix split into words.
+type shellRule struct {
+	command  []string
+	decision Decision
+}
 
-	match := strings.Join(wordTexts(words), " ")
+// shellRuleList returns the shell rules that carry a command prefix.
+func (p Policy) shellRuleList() []shellRule {
+	var out []shellRule
 	for _, rule := range p.Rules {
-		if rule.Tool != ToolShell {
+		if rule.Tool != ToolShell || rule.Command == "" {
 			continue
 		}
-		if rule.Command == "" || tokenPrefix(rule.Command, match) {
-			setHead(rule.Decision)
+		words := strings.Fields(rule.Command)
+		if len(words) == 0 {
+			continue
+		}
+		out = append(out, shellRule{command: words, decision: rule.Decision})
+	}
+	return out
+}
+
+// shellAllDecision returns the decision of the rules that apply to every shell
+// request, and whether such a rule exists.
+func (p Policy) shellAllDecision() (Decision, bool) {
+	var out Decision
+	found := false
+	for _, rule := range p.Rules {
+		if rule.Tool != ToolShell || rule.Command != "" {
+			continue
+		}
+		if !found || rule.Decision.rank() > out.rank() {
+			out, found = rule.Decision, true
 		}
 	}
-	// A command can also start behind a launcher, behind an inline command flag, or
-	// behind an exec flag: "xargs rm" runs rm even though rm is not the first word.
-	launched := false
-	for i := range words {
+	return out, found
+}
+
+// matchShellRules returns the strictest decision among the rules whose command prefix
+// matches the words of a command, and whether any of them matched.
+func matchShellRules(rules []shellRule, words []shellWord) (Decision, bool) {
+	if len(words) == 0 {
+		return "", false
+	}
+	var out Decision
+	found := false
+	for _, rule := range rules {
+		if !matchesShellRule(rule.command, words) {
+			continue
+		}
+		if !found || rule.decision.rank() > out.rank() {
+			out, found = rule.decision, true
+		}
+	}
+	return out, found
+}
+
+// matchesShellRule reports whether the command prefix of a rule matches the words of a
+// command. The first word of both sides is compared by its base name, so a rule on
+// "rm" also covers "/bin/rm".
+func matchesShellRule(want []string, words []shellWord) bool {
+	if len(want) == 0 || len(words) < len(want) {
+		return false
+	}
+	for i := range want {
+		got := words[i].text
 		if i == 0 {
+			if commandWord(want[0]) != commandWord(got) {
+				return false
+			}
 			continue
 		}
-		if isCommandLauncher(words[i-1].text) {
-			launched = true
-		}
-		if !launched && !isInlineCommandFlag(words[i-1].text) && !isExecFlag(words[i-1].text) {
-			continue
-		}
-		rest := strings.Join(wordTexts(words[i:]), " ")
-		for _, rule := range p.Rules {
-			if rule.Tool != ToolShell || rule.Command == "" {
-				continue
-			}
-			if tokenPrefix(rule.Command, rest) {
-				setHidden(rule.Decision)
-			}
+		if want[i] != got {
+			return false
 		}
 	}
-	// A quoted payload carries a command of its own.
-	for _, payload := range payloads {
-		if !analyzablePayload(payload) {
-			continue
-		}
-		pw, pp, _ := scanShell(payload)
-		if len(pw) == 0 {
-			continue
-		}
-		pHead, pMatched, pHidden := p.shellRules(pw, pp)
-		if pMatched {
-			setHidden(pHead)
-		}
-		if pHidden != "" {
-			setHidden(pHidden)
-		}
-	}
-	return head, headMatched, hidden
+	return true
 }
 
 // hasShellPrefixRules reports whether the policy carries a shell rule that a hidden
 // command could slip past. Without one there is nothing for an unusual spelling to
-// hide from, and the default answer stands.
+// hide from.
 func (p Policy) hasShellPrefixRules() bool {
 	for _, rule := range p.Rules {
 		if rule.Tool == ToolShell && rule.Command != "" {
@@ -400,25 +428,51 @@ func (p Policy) hasShellPrefixRules() bool {
 
 // shellWord is one whitespace-separated word of a command segment with quoting
 // resolved: quoted text is part of the word, and a word that mixes quoted and
-// unquoted text is marked as mixed because its value is not literal.
+// unquoted text is marked as mixed because its value is not literal. A word that is
+// exactly one quoted region keeps its content, because that content can be a command
+// of its own.
 type shellWord struct {
 	text  string
 	mixed bool
+	// payload holds the content of a word that is exactly one quoted region.
+	payload string
+	// isPayload reports whether the word is exactly one quoted region.
+	isPayload bool
 }
 
-// scanShell resolves quoting in one command segment. It returns the words, the content
-// of every quoted region, and whether a quote was left open.
-func scanShell(seg string) (words []shellWord, payloads []string, unterminated bool) {
-	var cur, quoted strings.Builder
-	var curMixed, sawQuote bool
+// commandSequence returns the words of the command that starts at a word: a quoted
+// payload is a command of its own, everything else continues in the segment.
+func commandSequence(words []shellWord, i int) []shellWord {
+	if i < 0 || i >= len(words) {
+		return nil
+	}
+	if words[i].isPayload {
+		inner, _ := scanShell(words[i].payload)
+		return inner
+	}
+	return words[i:]
+}
+
+// scanShell resolves quoting in one command segment. It returns the words and whether
+// a quote was left open.
+func scanShell(seg string) (words []shellWord, unterminated bool) {
+	var cur, region strings.Builder
+	var curMixed, sawQuote, otherText bool
+	var regions int
 	var inQuote byte
 
 	flush := func() {
 		if cur.Len() > 0 || sawQuote {
-			words = append(words, shellWord{text: cur.String(), mixed: curMixed})
+			w := shellWord{text: cur.String(), mixed: curMixed}
+			if regions == 1 && !otherText {
+				w.payload, w.isPayload = region.String(), true
+			}
+			words = append(words, w)
 		}
 		cur.Reset()
-		curMixed, sawQuote = false, false
+		region.Reset()
+		curMixed, sawQuote, otherText = false, false, false
+		regions = 0
 	}
 
 	for i := 0; i < len(seg); i++ {
@@ -427,72 +481,133 @@ func scanShell(seg string) (words []shellWord, payloads []string, unterminated b
 		case inQuote != 0:
 			if c == inQuote {
 				inQuote = 0
-				payloads = append(payloads, quoted.String())
-				quoted.Reset()
 				continue
 			}
 			if c == '\\' && inQuote == '"' && i+1 < len(seg) {
 				i++
 				cur.WriteByte(seg[i])
-				quoted.WriteByte(seg[i])
+				region.WriteByte(seg[i])
 				continue
 			}
 			cur.WriteByte(c)
-			quoted.WriteByte(c)
+			region.WriteByte(c)
 		case c == '\'' || c == '"':
-			inQuote = c
-			sawQuote = true
 			if cur.Len() > 0 {
 				curMixed = true
+				otherText = true
 			}
-			quoted.Reset()
+			inQuote = c
+			sawQuote = true
+			regions++
+			region.Reset()
 		case c == '\\' && i+1 < len(seg):
 			i++
 			cur.WriteByte(seg[i])
+			otherText = true
 		case c == ' ' || c == '\t':
 			flush()
 		default:
 			cur.WriteByte(c)
+			otherText = true
 		}
 	}
 	unterminated = inQuote != 0
 	flush()
-	return words, payloads, unterminated
+	return words, unterminated
 }
 
-func wordTexts(words []shellWord) []string {
-	out := make([]string, len(words))
-	for i, w := range words {
-		out[i] = w.text
+func hasMixedWord(words []shellWord) bool {
+	for _, w := range words {
+		if w.mixed {
+			return true
+		}
+	}
+	return false
+}
+
+// commandWord returns the name of the command a word names: grouping punctuation is
+// removed and a path is reduced to its base name.
+func commandWord(w string) string {
+	w = strings.TrimLeft(w, "({!")
+	w = strings.TrimRight(w, ")};")
+	if w == "" {
+		return ""
+	}
+	return filepath.Base(w)
+}
+
+// headPosition returns the index of the word that names the command of a segment,
+// skipping the assignments and the control words that stand in front of a command.
+func headPosition(words []shellWord) int {
+	i := 0
+	for i < len(words) && (isAssignment(words[i].text) || isShellPrefix(words[i].text)) {
+		i++
+	}
+	return i
+}
+
+// commandPositions returns the indexes of the words that can start a command inside a
+// segment, besides the head: behind a launcher, behind an inline command flag, or
+// behind an exec flag.
+func commandPositions(words []shellWord, head int, headWord string) []int {
+	var out []int
+	launcherAt := -1
+	for i := head + 1; i < len(words); i++ {
+		prev := words[i-1].text
+		if isInlineCommandFlag(prev, headWord) || isExecFlag(prev) {
+			out = append(out, i)
+			continue
+		}
+		if isShellLauncher(prev) {
+			launcherAt = i
+		}
+		if launcherAt >= 0 && i >= launcherAt {
+			out = append(out, i)
+		}
 	}
 	return out
 }
 
-// analyzablePayload reports whether a quoted payload can be read as a command line on
-// its own. A payload that still holds quoting, substitution, or redirection is not
-// readable, and the command carrying it is never better than ask.
-func analyzablePayload(payload string) bool {
-	if payload == "" {
-		return false
+// isAssignment reports whether a word sets a variable in front of a command.
+func isAssignment(w string) bool {
+	i := 0
+	for i < len(w) && (w[i] == '_' || w[i] >= 'a' && w[i] <= 'z' || w[i] >= 'A' && w[i] <= 'Z' || w[i] >= '0' && w[i] <= '9') {
+		i++
 	}
-	if strings.ContainsAny(payload, "'\"`$") {
-		return false
-	}
-	return !strings.ContainsAny(payload, "<>")
+	return i > 0 && i < len(w) && w[i] == '='
 }
 
-// commandLaunchers are the words that run another command, so the command they run can
+// shellPrefixes are the control words that stand in front of a command.
+var shellPrefixes = map[string]bool{
+	"(": true, "{": true, "!": true, "(((": true, "builtin": true,
+	"command": true, "coproc": true, "do": true, "elif": true, "else": true,
+	"eval": true, "exec": true, "then": true, "time": true,
+}
+
+// shellLaunchers are the words that run another command, so the command they run can
 // sit in an argument position instead of the first one.
-var commandLaunchers = map[string]bool{
-	"builtin": true, "command": true, "doas": true, "env": true, "eval": true,
-	"exec": true, "ionice": true, "nice": true, "nohup": true, "setsid": true,
-	"stdbuf": true, "sudo": true, "then": true, "timeout": true, "time": true,
-	"watch": true, "xargs": true,
+var shellLaunchers = map[string]bool{
+	"doas": true, "env": true, "expect": true, "ionice": true, "nice": true,
+	"nohup": true, "script": true, "setsid": true, "stdbuf": true, "su": true,
+	"sudo": true, "timeout": true, "watch": true, "xargs": true,
 }
 
-// inlineCommandFlags are the flags that carry a command of their own.
+// inlineCommandFlags are the flags that carry a command of their own. The short
+// "-e" and "-E" only count behind an interpreter, where they carry code.
 var inlineCommandFlags = map[string]bool{
-	"-c": true, "-e": true, "-E": true, "-Command": true, "-EncodedCommand": true, "/c": true,
+	"-c": true, "/c": true, "-EncodedCommand": true,
+}
+
+// interpreterFlags are the flags that carry code behind an interpreter.
+var interpreterFlags = map[string]bool{
+	"-e": true, "-E": true,
+}
+
+// shellInterpreters are the programs whose short flags carry code.
+var shellInterpreters = map[string]bool{
+	"awk": true, "bash": true, "node": true, "perl": true, "php": true,
+	"python": true, "python2": true, "python3": true, "ruby": true, "sh": true,
+	"zsh": true,
 }
 
 // execFlags are the flags that run a command for every match, as find does.
@@ -500,11 +615,48 @@ var execFlags = map[string]bool{
 	"-exec": true, "-execdir": true,
 }
 
-func isCommandLauncher(word string) bool { return commandLaunchers[word] }
+// shellExecutors are the programs whose arguments decide what runs. The engine cannot
+// read them, so a request that reaches one is never better than ask.
+var shellExecutors = map[string]bool{
+	"adb": true, "ansible": true, "ansible-playbook": true, "ash": true, "awk": true,
+	"bash": true, "bun": true, "bundle": true, "busybox": true, "cargo": true,
+	"csh": true, "dash": true, "deno": true, "docker": true, "dotnet": true,
+	"expect": true, "fish": true, "gawk": true, "gmake": true, "go": true,
+	"gradle": true, "helm": true, "java": true, "js": true, "ksh": true,
+	"kubectl": true, "make": true, "mawk": true, "mvn": true, "mysql": true,
+	"nerdctl": true, "node": true, "npm": true, "npx": true, "perl": true,
+	"php": true, "pip": true, "pip3": true, "podman": true, "poetry": true,
+	"psql": true, "python": true, "python2": true, "python3": true, "rake": true,
+	"redis-cli": true, "rsync": true, "ruby": true, "scp": true, "sed": true,
+	"sftp": true, "sh": true, "ssh": true, "systemctl": true, "task": true,
+	"tcsh": true, "terraform": true, "uv": true, "watch": true, "yarn": true,
+	"zsh": true,
+}
 
-func isInlineCommandFlag(word string) bool { return inlineCommandFlags[word] }
+func isShellPrefix(word string) bool { return shellPrefixes[word] }
+
+func isShellLauncher(word string) bool { return shellLaunchers[word] }
+
+func isShellExecutor(word string) bool { return shellExecutors[word] }
 
 func isExecFlag(word string) bool { return execFlags[word] }
+
+// isInlineCommandFlag reports whether a flag carries a command of its own.
+func isInlineCommandFlag(word string, headWord string) bool {
+	if inlineCommandFlags[word] {
+		return true
+	}
+	return interpreterFlags[word] && shellInterpreters[headWord]
+}
+
+// spliceContinuations removes the line continuations of a command, so a command
+// written over two lines is judged as the one command it is.
+func spliceContinuations(command string) string {
+	if !strings.Contains(command, "\\\n") && !strings.Contains(command, "\\\r\n") {
+		return command
+	}
+	return strings.NewReplacer("\\\r\n", "", "\\\n", "").Replace(command)
+}
 
 // splitShell breaks a command line at the separators that start another command. It
 // ignores quoting on purpose: splitting inside quotes only makes a command look like more
@@ -521,10 +673,9 @@ func splitShell(command string) []string {
 }
 
 // hasUnanalyzableSyntax reports syntax whose effect a prefix match cannot see:
-// command substitution and redirection.
+// expansion, command substitution, and redirection.
 func hasUnanalyzableSyntax(command string) bool {
-	return strings.Contains(command, "$(") || strings.Contains(command, "`") ||
-		strings.ContainsAny(command, "<>")
+	return strings.ContainsAny(command, "$`<>")
 }
 
 // tokenPrefix reports whether the whitespace-separated tokens of prefix are the first

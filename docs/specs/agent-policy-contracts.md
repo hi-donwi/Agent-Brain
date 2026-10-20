@@ -61,16 +61,26 @@ character.
 4. A shell command is split at `;`, `&`, `|`, and newlines, and every part is judged; the
    result is the most restrictive part. The split ignores quoting on purpose: it can make a
    command look like more commands, never fewer. `git status` matches `git status -s` and
-   not `git statusx`.
-5. A command containing `$(`, a backtick, `<`, or `>` is never better than ask.
-6. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. A
-   command that does not start at the head of a part is still matched where it can start:
-   behind a launcher (`xargs rm`, `sudo -u root rm`), behind an inline command flag
-   (`sh -c`, `python -e`), or behind an exec flag (`find -exec`). A quoted payload that
-   holds a command line is judged as a command of its own (`echo 'rm -rf /'`).
-7. A part that cannot be read is never better than ask: an unterminated quote, a word that
-   mixes quoted and unquoted text, or a payload that still holds quoting or substitution.
-   A hidden command never loosens the answer, only tightens it.
+   not `git statusx`. A line continuation is spliced before the split, so a command
+   written over two lines is judged as the one command it is.
+5. A command containing `$`, a backtick, `<`, or `>` is never better than ask: the engine
+   cannot read what the expansion produces.
+6. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. The
+   first word of a rule and of a command are compared by their base name, so a rule on
+   `rm` also covers `/bin/rm`.
+7. The command of a part is the first word that is neither an assignment nor a control
+   word, so `FOO=bar rm` and `(rm)` and `{ rm; }` and `do rm` all name `rm`.
+8. A command is also matched where it can start besides the head: behind a launcher
+   (`xargs rm`, `sudo -u root rm`), behind an inline command flag (`sh -c`, `python -e`),
+   or behind an exec flag (`find -exec`). A quoted payload behind such a flag is judged as
+   a command of its own (`sh -c 'rm -rf /'`); a quoted argument to an ordinary command is
+   not a command (`echo 'rm -rf /'`).
+9. A program that runs another program (`docker`, `ssh`, `make`, a shell, an interpreter)
+   cannot be judged from its name: what runs inside it depends on its arguments. A
+   request that reaches such a program and matches no rule is never better than ask.
+10. A command the engine cannot read is never better than ask: an unterminated quote, or
+    a word that mixes quoted and unquoted text. A hidden command never loosens the
+    answer, only tightens it.
 
 Deny rules on shell commands are guardrails, not a sandbox. A forbidden command written in
 an unusual way is judged as the command it hides, and one that cannot be read falls to

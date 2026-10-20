@@ -126,6 +126,8 @@ func TestShellDenyRulesCannotBeHiddenByQuotingOrLaunchers(t *testing.T) {
 		{"'rm'", Deny},
 		{`"rm"`, Deny},
 		{"r''m -rf /", Deny},
+		{"/bin/rm -rf /", Deny},
+		{"FOO=bar rm -rf /", Deny},
 		{"sh -c 'rm -rf /'", Deny},
 		{"bash -c 'rm -rf /'", Deny},
 		{"env sh -c 'rm -rf /'", Deny},
@@ -134,7 +136,12 @@ func TestShellDenyRulesCannotBeHiddenByQuotingOrLaunchers(t *testing.T) {
 		{"git commit -m 'x' && sh -c 'rm -rf /'", Deny},
 		{"sudo -u root rm -rf /", Deny},
 		{"find . -exec rm {} \\;", Deny},
-		{"echo 'rm -rf /'", Deny},
+		{"(rm -rf /)", Deny},
+		{"{ rm -rf /; }", Deny},
+		{"while true; do rm -rf /; done", Deny},
+		{"! rm -rf /", Deny},
+		{"rm\\\n -rf /", Deny},
+		{"r\\\nm -rf /", Deny},
 	}
 	for _, c := range cases {
 		if got := decide(t, p, ToolShell, "", c.cmd); got != c.want {
@@ -152,7 +159,10 @@ func TestShellUnreadableCommandFallsToAsk(t *testing.T) {
 	cases := []string{
 		"echo 'unterminated",
 		`echo "$PATH"`,
-		"echo 'it\"s'",
+		"c=rm; $c -rf /",
+		"ssh host rm -rf /",
+		"docker run img rm -rf /",
+		"make -f Makefile rm",
 	}
 	for _, cmd := range cases {
 		if got := decide(t, p, ToolShell, "", cmd); got != Ask {
@@ -176,6 +186,7 @@ func TestShellQuotedArgumentKeepsItsDecision(t *testing.T) {
 	p := Policy{Root: root, Default: Deny, Rules: []Rule{
 		{Tool: ToolShell, Command: "git commit", Decision: Allow},
 		{Tool: ToolShell, Command: "git push", Decision: Allow},
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
 	}}
 	cases := []struct {
 		cmd  string
@@ -183,7 +194,9 @@ func TestShellQuotedArgumentKeepsItsDecision(t *testing.T) {
 	}{
 		{"git commit -m 'fix the thing'", Allow},
 		{`git commit -m "fix the thing"`, Allow},
+		{"git commit -m 'rm'", Allow},
 		{"git push --force", Allow},
+		{"echo 'rm -rf /'", Deny},
 		{"git rebase -i HEAD~3", Deny},
 	}
 	for _, c := range cases {
