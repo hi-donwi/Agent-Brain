@@ -83,6 +83,12 @@ The Skill Forge automated pattern extraction lifecycle:
 - `eval <candidate-name> [--json]`: benchmarks against direct, paraphrase, and near-miss fixtures.
 - `harden <candidate-name> [--rounds <n>]`: refines descriptions and procedural instructions.
 
+### 1.16 `lokal agent [instructions|check|subagents]`
+Inspects the agent policy contracts of ADR-0013. Never executes a tool call.
+- `instructions [--root <dir>] [--directory <rel>]`: reads the applicable project instruction files.
+- `check --tool <name> [--path <p>] [--command <c>] [--policy <file>] [--role <name>] [--definitions <dir>]`: returns `allow`, `ask`, or `deny` for one request.
+- `subagents [--root <dir>] [--definitions <dir>]`: lists the known sub-agent role definitions.
+
 ---
 
 ## 2. Configuration Schema (`config.yaml`)
@@ -159,6 +165,9 @@ Token estimation endpoint to assist agent hosts in budgeting context windows:
 | `find_symbol` | `name` (str), `path` (str) | Finds symbol definitions and references |
 | `search_code` | `pattern` (str), `path` (str) | Regular expression search across source files |
 | `project_commands` | `path` (str) | Detects build, test, and lint commands |
+| `project_instructions` | `directory` (str) | Reads bounded project instruction files inside the configured root |
+| `check_tool_permission` | `tool` (str, required), `path` (str), `command` (str), `role` (str) | Judges a tool request with the operator policy; returns allow, ask, or deny |
+| `list_subagents` | - | Lists sub-agent role definitions; operator definitions take precedence |
 
 ### Resources:
 - `project://instructions`: Returns project instruction documents (`AGENTS.md`, `CLAUDE.md`).

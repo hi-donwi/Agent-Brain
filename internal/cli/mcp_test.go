@@ -28,4 +28,10 @@ func TestMcpCmdConstruction(t *testing.T) {
 	if cmd.Short == "" {
 		t.Error("expected non-empty command short description")
 	}
+	if cmd.Flags().Lookup("root") == nil {
+		t.Error("expected a --root flag to configure the project root of the agent policy contracts")
+	}
+	if cmd.Flags().Lookup("agent-policy") == nil {
+		t.Error("expected an --agent-policy flag")
+	}
 }

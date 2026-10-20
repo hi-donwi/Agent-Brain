@@ -64,8 +64,9 @@ host picks the default per session.
 - Brain's scope grows from knowledge and routing to include a policy engine, which needs
   its own maintenance and security review.
 - A permission decision is only as good as the host's enforcement. Shell prefix rules are
-  not a sandbox: a denied command written in an unusual way falls to ask, not deny. Hosts
-  must still isolate execution in a worktree or container.
+  not a sandbox: a denied command written in an unusual way is judged as the command it
+  hides, and one that cannot be read falls to ask, not allow. Hosts must still isolate
+  execution in a worktree or container.
 - Until the exposure follow-up lands, Agent-Control cannot call these contracts.
 
 ### Neutral
@@ -84,7 +85,7 @@ host picks the default per session.
 ## Follow-up
 
 - [x] Stage 1: `internal/agent` with instructions, permissions, and sub-agent registry, tested
-- [ ] Expose the three contracts as read-only MCP tools and a `brain agent` inspection
+- [x] Expose the three contracts as read-only MCP tools and a `brain agent` inspection
       command, so a host and an operator can query them
 - [ ] Publish the policy and definition formats with shared test vectors for Agent-Control
 - [ ] Agent-Control: adopt the contracts in place of its own checks (its own roadmap)

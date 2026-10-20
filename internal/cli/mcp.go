@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/hi-donwi/Agent-Brain/internal/agent"
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
@@ -42,6 +43,7 @@ func defaultMcpDeps() McpDeps {
 func newMcpCmd(deps McpDeps) *cobra.Command {
 	var agentPolicyFile string
 	var agentDirs []string
+	var root string
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run read-only Model Context Protocol (MCP) server over stdio",
@@ -71,6 +73,13 @@ over tool execution policies, code changes, and loop execution.`,
 
 			// 2. Create Skills Manager
 			cwd, _ := os.Getwd()
+			if root == "" {
+				root = cwd
+			}
+			rootAbs, err := filepath.Abs(root)
+			if err != nil {
+				return fmt.Errorf("resolve project root: %w", err)
+			}
 			var configuredDirs []string
 			var aliases map[string]string
 
@@ -106,6 +115,7 @@ over tool execution policies, code changes, and loop execution.`,
 			// 4. Construct MCP server
 			srv := localmcp.NewServer(localmcp.Config{
 				Name:                "lokal",
+				RootDir:             rootAbs,
 				AgentPolicy:         operatorPolicy,
 				AgentDefinitionDirs: agentDirs,
 				Version:             buildinfo.Version,
@@ -122,5 +132,6 @@ over tool execution policies, code changes, and loop execution.`,
 
 	cmd.Flags().StringVar(&agentPolicyFile, "agent-policy", "", "Trusted operator policy; never selected by a tool call")
 	cmd.Flags().StringSliceVar(&agentDirs, "agent-definitions", nil, "Trusted sub-agent directories, most trusted first")
+	cmd.Flags().StringVar(&root, "root", "", "Project root for the agent policy contracts; defaults to the working directory")
 	return cmd
 }

@@ -63,9 +63,18 @@ character.
    command look like more commands, never fewer. `git status` matches `git status -s` and
    not `git statusx`.
 5. A command containing `$(`, a backtick, `<`, or `>` is never better than ask.
+6. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. A
+   command that does not start at the head of a part is still matched where it can start:
+   behind a launcher (`xargs rm`, `sudo -u root rm`), behind an inline command flag
+   (`sh -c`, `python -e`), or behind an exec flag (`find -exec`). A quoted payload that
+   holds a command line is judged as a command of its own (`echo 'rm -rf /'`).
+7. A part that cannot be read is never better than ask: an unterminated quote, a word that
+   mixes quoted and unquoted text, or a payload that still holds quoting or substitution.
+   A hidden command never loosens the answer, only tightens it.
 
 Deny rules on shell commands are guardrails, not a sandbox. A forbidden command written in
-an unusual way falls to ask, not allow, but the host must still isolate execution.
+an unusual way is judged as the command it hides, and one that cannot be read falls to
+ask, never to allow. The host must still isolate execution.
 
 ### Layering
 

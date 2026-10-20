@@ -271,16 +271,240 @@ func (p Policy) decideShell(command string) Decision {
 	}
 	out := Allow
 	for _, seg := range segments {
-		d := p.strictestOf(ToolShell, func(rule Rule) bool {
-			return rule.Command == "" || tokenPrefix(rule.Command, seg)
-		})
-		out = stricter(out, d)
+		out = stricter(out, p.decideShellSegment(seg))
 	}
 	if hasUnanalyzableSyntax(command) {
 		out = stricter(out, Ask)
 	}
 	return out
 }
+
+// decideShellSegment judges one command segment. The command it holds can be written in
+// a way that hides the real command from a prefix match, so the segment is judged at
+// every position a command can start from, and every payload it carries is judged as a
+// command of its own. A segment that cannot be read this way is never better than ask.
+func (p Policy) decideShellSegment(seg string) Decision {
+	words, payloads, unterminated := scanShell(seg)
+	if len(words) == 0 {
+		return p.defaultDecision()
+	}
+	head, matched, hidden := p.shellRules(words, payloads)
+	out := head
+	if !matched {
+		out = p.defaultDecision()
+	}
+	if hidden != "" {
+		out = stricter(out, hidden)
+	}
+	if p.hasShellPrefixRules() {
+		if unterminated {
+			out = stricter(out, Ask)
+		}
+		for _, w := range words {
+			if w.mixed {
+				out = stricter(out, Ask)
+				break
+			}
+		}
+		for _, payload := range payloads {
+			if !analyzablePayload(payload) {
+				out = stricter(out, Ask)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// shellRules returns the strictest decision among the shell rules that apply to the
+// head of a command, whether any such rule applied, and the strictest decision among
+// the rules that apply to a command hidden behind quoting or behind a launcher.
+func (p Policy) shellRules(words []shellWord, payloads []string) (Decision, bool, Decision) {
+	var head Decision
+	headMatched := false
+	var hidden Decision
+	setHead := func(d Decision) {
+		if !headMatched || d.rank() > head.rank() {
+			head, headMatched = d, true
+		}
+	}
+	setHidden := func(d Decision) {
+		if hidden == "" || d.rank() > hidden.rank() {
+			hidden = d
+		}
+	}
+
+	match := strings.Join(wordTexts(words), " ")
+	for _, rule := range p.Rules {
+		if rule.Tool != ToolShell {
+			continue
+		}
+		if rule.Command == "" || tokenPrefix(rule.Command, match) {
+			setHead(rule.Decision)
+		}
+	}
+	// A command can also start behind a launcher, behind an inline command flag, or
+	// behind an exec flag: "xargs rm" runs rm even though rm is not the first word.
+	launched := false
+	for i := range words {
+		if i == 0 {
+			continue
+		}
+		if isCommandLauncher(words[i-1].text) {
+			launched = true
+		}
+		if !launched && !isInlineCommandFlag(words[i-1].text) && !isExecFlag(words[i-1].text) {
+			continue
+		}
+		rest := strings.Join(wordTexts(words[i:]), " ")
+		for _, rule := range p.Rules {
+			if rule.Tool != ToolShell || rule.Command == "" {
+				continue
+			}
+			if tokenPrefix(rule.Command, rest) {
+				setHidden(rule.Decision)
+			}
+		}
+	}
+	// A quoted payload carries a command of its own.
+	for _, payload := range payloads {
+		if !analyzablePayload(payload) {
+			continue
+		}
+		pw, pp, _ := scanShell(payload)
+		if len(pw) == 0 {
+			continue
+		}
+		pHead, pMatched, pHidden := p.shellRules(pw, pp)
+		if pMatched {
+			setHidden(pHead)
+		}
+		if pHidden != "" {
+			setHidden(pHidden)
+		}
+	}
+	return head, headMatched, hidden
+}
+
+// hasShellPrefixRules reports whether the policy carries a shell rule that a hidden
+// command could slip past. Without one there is nothing for an unusual spelling to
+// hide from, and the default answer stands.
+func (p Policy) hasShellPrefixRules() bool {
+	for _, rule := range p.Rules {
+		if rule.Tool == ToolShell && rule.Command != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// shellWord is one whitespace-separated word of a command segment with quoting
+// resolved: quoted text is part of the word, and a word that mixes quoted and
+// unquoted text is marked as mixed because its value is not literal.
+type shellWord struct {
+	text  string
+	mixed bool
+}
+
+// scanShell resolves quoting in one command segment. It returns the words, the content
+// of every quoted region, and whether a quote was left open.
+func scanShell(seg string) (words []shellWord, payloads []string, unterminated bool) {
+	var cur, quoted strings.Builder
+	var curMixed, sawQuote bool
+	var inQuote byte
+
+	flush := func() {
+		if cur.Len() > 0 || sawQuote {
+			words = append(words, shellWord{text: cur.String(), mixed: curMixed})
+		}
+		cur.Reset()
+		curMixed, sawQuote = false, false
+	}
+
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch {
+		case inQuote != 0:
+			if c == inQuote {
+				inQuote = 0
+				payloads = append(payloads, quoted.String())
+				quoted.Reset()
+				continue
+			}
+			if c == '\\' && inQuote == '"' && i+1 < len(seg) {
+				i++
+				cur.WriteByte(seg[i])
+				quoted.WriteByte(seg[i])
+				continue
+			}
+			cur.WriteByte(c)
+			quoted.WriteByte(c)
+		case c == '\'' || c == '"':
+			inQuote = c
+			sawQuote = true
+			if cur.Len() > 0 {
+				curMixed = true
+			}
+			quoted.Reset()
+		case c == '\\' && i+1 < len(seg):
+			i++
+			cur.WriteByte(seg[i])
+		case c == ' ' || c == '\t':
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	unterminated = inQuote != 0
+	flush()
+	return words, payloads, unterminated
+}
+
+func wordTexts(words []shellWord) []string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = w.text
+	}
+	return out
+}
+
+// analyzablePayload reports whether a quoted payload can be read as a command line on
+// its own. A payload that still holds quoting, substitution, or redirection is not
+// readable, and the command carrying it is never better than ask.
+func analyzablePayload(payload string) bool {
+	if payload == "" {
+		return false
+	}
+	if strings.ContainsAny(payload, "'\"`$") {
+		return false
+	}
+	return !strings.ContainsAny(payload, "<>")
+}
+
+// commandLaunchers are the words that run another command, so the command they run can
+// sit in an argument position instead of the first one.
+var commandLaunchers = map[string]bool{
+	"builtin": true, "command": true, "doas": true, "env": true, "eval": true,
+	"exec": true, "ionice": true, "nice": true, "nohup": true, "setsid": true,
+	"stdbuf": true, "sudo": true, "then": true, "timeout": true, "time": true,
+	"watch": true, "xargs": true,
+}
+
+// inlineCommandFlags are the flags that carry a command of their own.
+var inlineCommandFlags = map[string]bool{
+	"-c": true, "-e": true, "-E": true, "-Command": true, "-EncodedCommand": true, "/c": true,
+}
+
+// execFlags are the flags that run a command for every match, as find does.
+var execFlags = map[string]bool{
+	"-exec": true, "-execdir": true,
+}
+
+func isCommandLauncher(word string) bool { return commandLaunchers[word] }
+
+func isInlineCommandFlag(word string) bool { return inlineCommandFlags[word] }
+
+func isExecFlag(word string) bool { return execFlags[word] }
 
 // splitShell breaks a command line at the separators that start another command. It
 // ignores quoting on purpose: splitting inside quotes only makes a command look like more

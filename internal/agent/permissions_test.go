@@ -113,6 +113,86 @@ func TestShellSubstitutionAndRedirectionNeverAutoAllow(t *testing.T) {
 	}
 }
 
+func TestShellDenyRulesCannotBeHiddenByQuotingOrLaunchers(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+	}}
+	cases := []struct {
+		cmd  string
+		want Decision
+	}{
+		{"rm -rf /", Deny},
+		{"'rm'", Deny},
+		{`"rm"`, Deny},
+		{"r''m -rf /", Deny},
+		{"sh -c 'rm -rf /'", Deny},
+		{"bash -c 'rm -rf /'", Deny},
+		{"env sh -c 'rm -rf /'", Deny},
+		{"xargs rm", Deny},
+		{"echo hi | xargs rm", Deny},
+		{"git commit -m 'x' && sh -c 'rm -rf /'", Deny},
+		{"sudo -u root rm -rf /", Deny},
+		{"find . -exec rm {} \\;", Deny},
+		{"echo 'rm -rf /'", Deny},
+	}
+	for _, c := range cases {
+		if got := decide(t, p, ToolShell, "", c.cmd); got != c.want {
+			t.Errorf("shell %q = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}
+
+func TestShellUnreadableCommandFallsToAsk(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+		{Tool: ToolShell, Command: "echo", Decision: Allow},
+	}}
+	cases := []string{
+		"echo 'unterminated",
+		`echo "$PATH"`,
+		"echo 'it\"s'",
+	}
+	for _, cmd := range cases {
+		if got := decide(t, p, ToolShell, "", cmd); got != Ask {
+			t.Errorf("shell %q = %q, want ask", cmd, got)
+		}
+	}
+}
+
+func TestShellHiddenCommandNeverLoosensTheDefault(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Deny, Rules: []Rule{
+		{Tool: ToolShell, Command: "git", Decision: Allow},
+	}}
+	if got := decide(t, p, ToolShell, "", "sudo git status"); got != Deny {
+		t.Errorf("shell %q = %q, want deny", "sudo git status", got)
+	}
+}
+
+func TestShellQuotedArgumentKeepsItsDecision(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Deny, Rules: []Rule{
+		{Tool: ToolShell, Command: "git commit", Decision: Allow},
+		{Tool: ToolShell, Command: "git push", Decision: Allow},
+	}}
+	cases := []struct {
+		cmd  string
+		want Decision
+	}{
+		{"git commit -m 'fix the thing'", Allow},
+		{`git commit -m "fix the thing"`, Allow},
+		{"git push --force", Allow},
+		{"git rebase -i HEAD~3", Deny},
+	}
+	for _, c := range cases {
+		if got := decide(t, p, ToolShell, "", c.cmd); got != c.want {
+			t.Errorf("shell %q = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}
+
 func TestParsePolicyValidates(t *testing.T) {
 	good := []byte("default: ask\nrules:\n  - tool: read\n    path: \"**\"\n    decision: allow\n  - tool: shell\n    command: \"go test\"\n    decision: allow\n")
 	p, err := ParsePolicy(good)
