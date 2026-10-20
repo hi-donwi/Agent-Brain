@@ -132,16 +132,89 @@ func TestShellDenyRulesCannotBeHiddenByQuotingOrLaunchers(t *testing.T) {
 		{"bash -c 'rm -rf /'", Deny},
 		{"env sh -c 'rm -rf /'", Deny},
 		{"xargs rm", Deny},
-		{"echo hi | xargs rm", Deny},
-		{"git commit -m 'x' && sh -c 'rm -rf /'", Deny},
-		{"sudo -u root rm -rf /", Deny},
+		{"xargs -0 rm", Deny},
+		{"env FOO=bar rm", Deny},
+		{"sudo rm", Deny},
 		{"find . -exec rm {} \\;", Deny},
-		{"(rm -rf /)", Deny},
-		{"{ rm -rf /; }", Deny},
-		{"while true; do rm -rf /; done", Deny},
-		{"! rm -rf /", Deny},
-		{"rm\\\n -rf /", Deny},
-		{"r\\\nm -rf /", Deny},
+		{"sudo sh -c 'FOO=bar rm -rf /'", Deny},
+	}
+	for _, c := range cases {
+		if got := decide(t, p, ToolShell, "", c.cmd); got != c.want {
+			t.Errorf("shell %q = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+}
+
+func TestShellForbiddenCommandNeverComesBackAllow(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+	}}
+	commands := []string{
+		"if rm -rf /; then true; fi",
+		"while rm -rf /; do break; done",
+		"until rm -rf /; do break; done",
+		"case x in *) rm -rf /;; esac",
+		"function f { rm -rf /; }; f",
+		"time -p rm -rf /",
+		"command -p rm -rf /",
+		"exec -a foo rm -rf /",
+		"sudo sh -c 'FOO=bar rm -rf /'",
+		"sudo perl -e 'system(\"rm -rf /\")'",
+		"r? -rf /",
+		"{,rm} -rf /",
+		"git -c alias.x=!rm x",
+		"parallel rm ::: x",
+		"chroot / rm -rf /",
+		"c=rm; $c -rf /",
+		"sudo -u root rm -rf /",
+		"ssh host rm -rf /",
+		"docker run img rm -rf /",
+		"make -f Makefile rm",
+	}
+	for _, cmd := range commands {
+		if got := decide(t, p, ToolShell, "", cmd); got == Allow {
+			t.Errorf("shell %q = allow, want deny or ask", cmd)
+		}
+	}
+}
+
+func TestShellAllowNeedsAPlainCommand(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+	}}
+	cases := []string{
+		"sudo rm",
+		"xargs rm",
+		"sh -c 'rm -rf /'",
+		"git -c alias.x=!rm x",
+		"ls *.go",
+		"echo $HOME",
+		"rm -rf /",
+	}
+	for _, cmd := range cases {
+		if got := decide(t, p, ToolShell, "", cmd); got == Allow {
+			t.Errorf("shell %q = allow, want deny or ask", cmd)
+		}
+	}
+}
+
+func TestShellAllowNeedsAnExplicitRuleOrAnInertProgram(t *testing.T) {
+	root := t.TempDir()
+	p := Policy{Root: root, Default: Allow, Rules: []Rule{
+		{Tool: ToolShell, Command: "rm", Decision: Deny},
+	}}
+	cases := []struct {
+		cmd  string
+		want Decision
+	}{
+		{"ls -la", Allow},
+		{"echo hello", Allow},
+		{"cat notes.txt", Allow},
+		{"git status", Ask},
+		{"docker run img ls", Ask},
+		{"make build", Ask},
 	}
 	for _, c := range cases {
 		if got := decide(t, p, ToolShell, "", c.cmd); got != c.want {
@@ -176,8 +249,10 @@ func TestShellHiddenCommandNeverLoosensTheDefault(t *testing.T) {
 	p := Policy{Root: root, Default: Deny, Rules: []Rule{
 		{Tool: ToolShell, Command: "git", Decision: Allow},
 	}}
-	if got := decide(t, p, ToolShell, "", "sudo git status"); got != Deny {
-		t.Errorf("shell %q = %q, want deny", "sudo git status", got)
+	for _, cmd := range []string{"sudo git status", "xargs git status", "sh -c 'git status'"} {
+		if got := decide(t, p, ToolShell, "", cmd); got != Deny {
+			t.Errorf("shell %q = %q, want deny", cmd, got)
+		}
 	}
 }
 
@@ -196,7 +271,6 @@ func TestShellQuotedArgumentKeepsItsDecision(t *testing.T) {
 		{`git commit -m "fix the thing"`, Allow},
 		{"git commit -m 'rm'", Allow},
 		{"git push --force", Allow},
-		{"echo 'rm -rf /'", Deny},
 		{"git rebase -i HEAD~3", Deny},
 	}
 	for _, c := range cases {

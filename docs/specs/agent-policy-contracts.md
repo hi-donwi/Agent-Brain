@@ -65,26 +65,27 @@ character.
    written over two lines is judged as the one command it is.
 5. A command containing `$`, a backtick, `<`, or `>` is never better than ask: the engine
    cannot read what the expansion produces.
-6. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. The
+6. `allow` is the answer only for a plain command: one command word, inert arguments,
+   nothing in front of it but assignments, and no flag that carries a command or a piece
+   of code. A command the engine cannot read that way is never better than ask, whatever
+   the default says.
+7. `allow` also needs a rule that allows the command, or a program that only reads and
+   prints (`ls`, `cat`, `grep`, ...). A program that runs other programs (`docker`, `ssh`,
+   `make`, a shell, an interpreter) is never better than ask when no rule allows it.
+8. Quoting is resolved before a command is matched, so `"rm"` is the command `rm`. The
    first word of a rule and of a command are compared by their base name, so a rule on
    `rm` also covers `/bin/rm`.
-7. The command of a part is the first word that is neither an assignment nor a control
-   word, so `FOO=bar rm` and `(rm)` and `{ rm; }` and `do rm` all name `rm`.
-8. A command is also matched where it can start besides the head: behind a launcher
-   (`xargs rm`, `sudo -u root rm`), behind an inline command flag (`sh -c`, `python -e`),
-   or behind an exec flag (`find -exec`). A quoted payload behind such a flag is judged as
-   a command of its own (`sh -c 'rm -rf /'`); a quoted argument to an ordinary command is
-   not a command (`echo 'rm -rf /'`).
-9. A program that runs another program (`docker`, `ssh`, `make`, a shell, an interpreter)
-   cannot be judged from its name: what runs inside it depends on its arguments. A
-   request that reaches such a program and matches no rule is never better than ask.
-10. A command the engine cannot read is never better than ask: an unterminated quote, or
-    a word that mixes quoted and unquoted text. A hidden command never loosens the
-    answer, only tightens it.
+9. The command of a part is the first word that is neither an assignment nor a control
+   word, so `FOO=bar rm` names `rm`.
+10. A rule that denies a command also applies to the command a part hides: the command
+    behind a launcher (`xargs rm`), the command behind a flag that carries one
+    (`sh -c 'rm -rf /'`), and the command inside a quoted payload. A rule that only
+    tightens the answer costs nothing, so it is applied even where the engine would not
+    allow the command.
 
-Deny rules on shell commands are guardrails, not a sandbox. A forbidden command written in
-an unusual way is judged as the command it hides, and one that cannot be read falls to
-ask, never to allow. The host must still isolate execution.
+Deny rules on shell commands are guardrails, not a sandbox. The engine answers allow only
+for a command it can read as one plain command; every other command falls to ask. The
+host must still isolate execution.
 
 ### Layering
 

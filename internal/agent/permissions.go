@@ -269,9 +269,10 @@ func (p Policy) decideShell(command string) Decision {
 	if len(segments) == 0 {
 		return stricter(p.defaultDecision(), Ask)
 	}
+	rules := p.shellRuleList()
 	out := Allow
 	for _, seg := range segments {
-		out = stricter(out, p.decideShellSegment(seg))
+		out = stricter(out, p.decideShellSegment(seg, rules))
 	}
 	if hasUnanalyzableSyntax(command) {
 		out = stricter(out, Ask)
@@ -279,54 +280,43 @@ func (p Policy) decideShell(command string) Decision {
 	return out
 }
 
-// decideShellSegment judges one command segment. The command it holds can be written in
-// a way that hides the real command from a prefix match, so the quoting is resolved
-// first, the segment is judged at every position a command can start from, and the
-// head of the segment is judged with the assignments and the control words in front
-// of it skipped.
-func (p Policy) decideShellSegment(seg string) Decision {
+// decideShellSegment judges one command segment. The engine only answers allow when it
+// can read the segment as one plain command the policy allows; a segment it cannot read
+// that way is never better than ask, and a rule on a command the segment hides is still
+// applied, because a rule that only tightens the answer costs nothing.
+func (p Policy) decideShellSegment(seg string, rules []shellRule) Decision {
 	words, unterminated := scanShell(seg)
 	if len(words) == 0 {
 		return p.defaultDecision()
 	}
-	rules := p.shellRuleList()
 	head := headPosition(words)
-	headWords := words[head:]
 	headSequence := commandSequence(words, head)
-	if len(headSequence) == 0 {
-		headSequence = headWords
-	}
 	headName := ""
 	if len(headSequence) > 0 {
 		headName = commandWord(headSequence[0].text)
 	}
+	plain := plainCommand(words, head)
 
-	prefixDecision, prefixMatched := matchShellRules(rules, headSequence)
+	if d, ok := p.denyDecision(rules, words, head, headName); ok {
+		return d
+	}
+
+	headDecision, headMatched := matchShellRules(rules, headSequence)
 	allDecision, allMatched := p.shellAllDecision()
 
-	var base Decision
+	var out Decision
 	switch {
-	case allMatched && prefixMatched:
-		base = stricter(allDecision, prefixDecision)
 	case allMatched:
-		base = allDecision
-	case prefixMatched:
-		base = prefixDecision
-	default:
-		base = p.defaultDecision()
-		// A program that runs another program cannot be judged from its name alone:
-		// what runs inside it is up to its arguments, not to the policy.
-		if p.hasShellPrefixRules() && isShellExecutor(headName) {
-			base = stricter(base, Ask)
+		out = allDecision
+	case headMatched:
+		out = headDecision
+		if out == Allow && !plain {
+			out = Ask
 		}
-	}
-	out := base
-
-	// A command can also start behind a launcher, behind an inline command flag, or
-	// behind an exec flag: "xargs rm" runs rm even though rm is not the first word.
-	for _, i := range commandPositions(words, head, headName) {
-		if d, ok := matchShellRules(rules, commandSequence(words, i)); ok {
-			out = stricter(out, d)
+	default:
+		out = p.defaultDecision()
+		if p.hasShellPrefixRules() && (!plain || !knownInertProgram(headName)) {
+			out = stricter(out, Ask)
 		}
 	}
 	if unterminated || hasMixedWord(words) {
@@ -334,6 +324,107 @@ func (p Policy) decideShellSegment(seg string) Decision {
 	}
 	return out
 }
+
+// denyDecision reports whether a rule that denies a command matches a command the
+// segment hides: behind a launcher, behind a flag that carries a command, or inside a
+// quoted payload.
+func (p Policy) denyDecision(rules []shellRule, words []shellWord, head int, headName string) (Decision, bool) {
+	for _, i := range commandPositions(words, head, headName) {
+		sequence := commandSequence(words, i)
+		if len(sequence) == 0 {
+			continue
+		}
+		if d, ok := matchShellRules(rules, sequence); ok && d == Deny {
+			return Deny, true
+		}
+		if words[i].isPayload {
+			// The payload is a command of its own: judge it as one.
+			if d := p.decideShell(words[i].payload); d == Deny {
+				return Deny, true
+			}
+		}
+	}
+	return "", false
+}
+
+// plainCommand reports whether a segment is one plain command: a command word and
+// inert arguments, with nothing in front of it but assignments and nothing in it that
+// can run another command. A segment that is not plain is never answered with allow.
+func plainCommand(words []shellWord, head int) bool {
+	if head < 0 || head >= len(words) {
+		return false
+	}
+	for i := 0; i < head; i++ {
+		if !isAssignment(words[i].text) {
+			return false
+		}
+	}
+	headWord := words[head].text
+	if !isPlainWord(headWord) {
+		return false
+	}
+	if isShellLauncher(commandWord(headWord)) {
+		return false
+	}
+	for _, w := range words[head+1:] {
+		if w.mixed {
+			return false
+		}
+		if isCommandCarryingFlag(w.text) {
+			return false
+		}
+		if !w.quoted && strings.ContainsAny(w.text, "*?[{") {
+			return false
+		}
+	}
+	return true
+}
+
+// isPlainWord reports whether a word is a plain program name or argument: letters,
+// digits, and the punctuation a path or an option is made of.
+func isPlainWord(w string) bool {
+	if w == "" || w[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_' || c == '-' || c == '.' || c == '/' || c == '+' || c == '@' ||
+			c == ':' || c == ',' || c == '=' || c == '%' || c == '#' || c == '~':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// commandCarryingFlags are the flags whose value is a command or a piece of code.
+var commandCarryingFlags = map[string]bool{
+	"-c": true, "-e": true, "-E": true, "-exec": true, "-execdir": true,
+	"--exec": true, "--to-command": true, "--rsync-path": true,
+	"-Command": true, "-EncodedCommand": true, "/c": true,
+}
+
+func isCommandCarryingFlag(word string) bool { return commandCarryingFlags[word] }
+
+// inertPrograms are the programs that only read and print. A request that runs one of
+// them is answered with the default; a request that runs any other program is never
+// better than ask when the policy carries a rule to protect.
+var inertPrograms = map[string]bool{
+	"basename": true, "cat": true, "cmp": true, "comm": true, "cut": true,
+	"date": true, "df": true, "diff": true, "dirname": true, "du": true,
+	"echo": true, "egrep": true, "false": true, "fgrep": true, "file": true,
+	"fold": true, "grep": true, "head": true, "hostname": true, "id": true,
+	"join": true, "ls": true, "md5sum": true, "nl": true, "od": true,
+	"printf": true, "pwd": true, "readlink": true, "realpath": true, "rev": true,
+	"seq": true, "sha256sum": true, "shasum": true, "sleep": true, "sort": true,
+	"stat": true, "tail": true, "test": true, "tr": true, "true": true,
+	"type": true, "uname": true, "uniq": true, "wc": true, "which": true,
+	"whoami": true, "xxd": true,
+}
+
+func knownInertProgram(word string) bool { return inertPrograms[word] }
 
 // shellRule is a shell rule with its command prefix split into words.
 type shellRule struct {
@@ -434,6 +525,8 @@ func (p Policy) hasShellPrefixRules() bool {
 type shellWord struct {
 	text  string
 	mixed bool
+	// quoted reports whether the word carries quoted text.
+	quoted bool
 	// payload holds the content of a word that is exactly one quoted region.
 	payload string
 	// isPayload reports whether the word is exactly one quoted region.
@@ -463,7 +556,7 @@ func scanShell(seg string) (words []shellWord, unterminated bool) {
 
 	flush := func() {
 		if cur.Len() > 0 || sawQuote {
-			w := shellWord{text: cur.String(), mixed: curMixed}
+			w := shellWord{text: cur.String(), mixed: curMixed, quoted: sawQuote}
 			if regions == 1 && !otherText {
 				w.payload, w.isPayload = region.String(), true
 			}
@@ -561,8 +654,11 @@ func commandPositions(words []shellWord, head int, headWord string) []int {
 		if isShellLauncher(prev) {
 			launcherAt = i
 		}
-		if launcherAt >= 0 && i >= launcherAt {
+		if launcherAt >= 0 && i >= launcherAt && !isAssignment(words[i].text) && !strings.HasPrefix(words[i].text, "-") {
+			// The first word a launcher runs is a command; the words after it are
+			// its arguments, and an argument is not a command.
 			out = append(out, i)
+			launcherAt = -1
 		}
 	}
 	return out
