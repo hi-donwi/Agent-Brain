@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hi-donwi/Agent-Brain/internal/agent"
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
 	"github.com/hi-donwi/Agent-Brain/internal/codeintel"
 	"github.com/hi-donwi/Agent-Brain/internal/rag"
@@ -17,24 +18,29 @@ import (
 
 // Config configures the read-only lokal MCP server.
 type Config struct {
-	Name      string
-	Version   string
-	RootDir   string
-	Searcher  *rag.Searcher
-	SkillsMgr *skills.Manager
-	Adapter   backend.Adapter
-	Aliases   map[string]string
+	// AgentPolicy is selected by the operator at startup, never by an MCP tool call.
+	AgentPolicy         *agent.Policy
+	AgentDefinitionDirs []string
+	Name                string
+	Version             string
+	RootDir             string
+	Searcher            *rag.Searcher
+	SkillsMgr           *skills.Manager
+	Adapter             backend.Adapter
+	Aliases             map[string]string
 }
 
 // Server exposes lokal's knowledge, skills, models, and code intelligence over MCP.
 type Server struct {
-	mcpServer *server.MCPServer
-	rootDir   string
-	searcher  *rag.Searcher
-	skillsMgr *skills.Manager
-	adapter   backend.Adapter
-	aliases   map[string]string
-	handlers  map[string]server.ToolHandlerFunc
+	agentPolicy         agent.Policy
+	agentDefinitionDirs []string
+	mcpServer           *server.MCPServer
+	rootDir             string
+	searcher            *rag.Searcher
+	skillsMgr           *skills.Manager
+	adapter             backend.Adapter
+	aliases             map[string]string
+	handlers            map[string]server.ToolHandlerFunc
 }
 
 // NewServer registers read-only MCP tools and resources and builds an MCP server instance.
@@ -68,6 +74,14 @@ func NewServer(cfg Config) *Server {
 		handlers:  make(map[string]server.ToolHandlerFunc),
 	}
 
+	s.agentPolicy = agent.Policy{Root: s.rootDir}
+	if cfg.AgentPolicy != nil {
+		s.agentPolicy = *cfg.AgentPolicy
+		s.agentPolicy.Rules = append([]agent.Rule(nil), cfg.AgentPolicy.Rules...)
+		s.agentPolicy.Root = s.rootDir
+	}
+	s.agentDefinitionDirs = append([]string(nil), cfg.AgentDefinitionDirs...)
+	s.registerAgentTools()
 	s.registerTools()
 	s.registerResources()
 	return s

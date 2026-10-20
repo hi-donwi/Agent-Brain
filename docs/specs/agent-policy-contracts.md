@@ -1,7 +1,7 @@
 # Agent policy contracts
 
 Status: Stage 1 implemented in `internal/agent` (see [ADR-0013](../adr/0013-platform-owns-agent-policy-contracts-host-executes.md)).
-Not yet exposed through MCP or the command line; see Follow-up.
+Stage 2 exposes read-only CLI and MCP inspection; the host remains responsible for execution and approvals.
 
 An agent host that wants Brain behind a coding agent needs three answers: what the project
 asks of the agent, whether a tool call is allowed, and which sub-agents exist and what each
@@ -105,6 +105,36 @@ replace the operator's own role. A bad file is reported and does not stop the ot
 
 ## Follow-up
 
-- Read-only MCP tools and a `brain agent` inspection command exposing the three contracts.
+- Implemented: read-only MCP tools and `brain agent` inspection commands (see below).
 - Shared test vectors so a host in another language can check its implementation.
 - Per-role model routing, once the owner chooses a default (today the host picks per session).
+
+## Inspection interfaces
+
+CLI commands emit JSON and perform no tool execution:
+
+```sh
+brain agent instructions --root . --directory internal
+brain agent check --root . --tool write --path main.go
+brain agent check --root . --policy operator-policy.yaml --tool shell --command "go test ./..."
+brain agent subagents --root .
+brain agent check --root . --tool write --path main.go --role reviewer
+```
+
+Definitions default to `.brain/agents` under the project root. `--definitions` accepts
+operator-selected directories in trust order. Unknown roles fail; their requested tool
+lists only narrow the operator policy. Without an explicit policy every ordinary request
+requires a host decision (`ask`), and out-of-root file requests are denied.
+
+MCP adds `project_instructions`, `check_tool_permission`, and `list_subagents`.
+The configured MCP root confines instruction discovery and path decisions. Project
+instructions are rendered as untrusted guidance, not authorization. Tool arguments cannot
+supply a policy or select definition directories; unknown arguments and non-string inputs
+are rejected. The host must interpret `ask` as requiring its own approval and must not
+execute denied requests. A decision is advisory, not a persisted approval token.
+
+An operator can start MCP with `brain mcp --agent-policy operator-policy.yaml
+--agent-definitions /trusted/roles`. Policy files are limited to 96 KiB. Trusted definitions
+precede project definitions; name conflicts and invalid definitions are reported.
+These commands do not start subagents, execute shell commands, edit files, or implement an
+autonomous coding loop. Those remain host responsibilities under ADR-0013.

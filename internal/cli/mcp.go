@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hi-donwi/Agent-Brain/internal/agent"
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
 	"github.com/hi-donwi/Agent-Brain/internal/buildinfo"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
@@ -39,6 +40,8 @@ func defaultMcpDeps() McpDeps {
 }
 
 func newMcpCmd(deps McpDeps) *cobra.Command {
+	var agentPolicyFile string
+	var agentDirs []string
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run read-only Model Context Protocol (MCP) server over stdio",
@@ -80,14 +83,36 @@ over tool execution policies, code changes, and loop execution.`,
 			// 3. Resolve backend adapter
 			ad, _ := deps.ResolveAdapter()
 
+			// Operator-selected policy is immutable for this server invocation.
+			var operatorPolicy *agent.Policy
+			if agentPolicyFile != "" {
+				info, err := os.Stat(agentPolicyFile)
+				if err != nil {
+					return err
+				}
+				if !info.Mode().IsRegular() || info.Size() > 96*1024 {
+					return fmt.Errorf("agent policy must be a regular file no larger than 96 KiB")
+				}
+				data, err := os.ReadFile(agentPolicyFile)
+				if err != nil {
+					return err
+				}
+				policy, err := agent.ParsePolicy(data)
+				if err != nil {
+					return err
+				}
+				operatorPolicy = &policy
+			}
 			// 4. Construct MCP server
 			srv := localmcp.NewServer(localmcp.Config{
-				Name:      "lokal",
-				Version:   buildinfo.Version,
-				Searcher:  searcher,
-				SkillsMgr: skillsMgr,
-				Adapter:   ad,
-				Aliases:   aliases,
+				Name:                "lokal",
+				AgentPolicy:         operatorPolicy,
+				AgentDefinitionDirs: agentDirs,
+				Version:             buildinfo.Version,
+				Searcher:            searcher,
+				SkillsMgr:           skillsMgr,
+				Adapter:             ad,
+				Aliases:             aliases,
 			})
 
 			// 5. Start stdio loop
@@ -95,5 +120,7 @@ over tool execution policies, code changes, and loop execution.`,
 		},
 	}
 
+	cmd.Flags().StringVar(&agentPolicyFile, "agent-policy", "", "Trusted operator policy; never selected by a tool call")
+	cmd.Flags().StringSliceVar(&agentDirs, "agent-definitions", nil, "Trusted sub-agent directories, most trusted first")
 	return cmd
 }

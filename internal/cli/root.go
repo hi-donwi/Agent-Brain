@@ -26,6 +26,7 @@ backends, indexes code and files with hybrid retrieval (RAG), and serves knowled
 		SilenceErrors: true,
 	}
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newAgentCmd())
 	root.AddCommand(newDoctorCmd(doctor.Default))
 	root.AddCommand(newSetupCmd(defaultSetupDeps()))
 	root.AddCommand(newModelsCmd(defaultModelsDeps()))
