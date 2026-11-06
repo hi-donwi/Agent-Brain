@@ -33,7 +33,7 @@ func accountService() (router.AccountService, error) {
 func newAccountsCmd() *cobra.Command { return newAccountsCmdWithDeps(AccountDeps{}) }
 func newAccountsCmdWithDeps(deps AccountDeps) *cobra.Command {
 	cmd := &cobra.Command{Use: "accounts", Aliases: []string{"acc", "account"}, Short: "Manage provider accounts, native login, and gateway credentials"}
-	cmd.AddCommand(newAccountsListCmd(), newAccountsAddCmdWithDeps(deps), newAccountsRemoveCmd(), newAccountUseCmd(), newAccountLoginCmd(deps), newAccountTestCmd(), newAccountModelsCmd())
+	cmd.AddCommand(newAccountsListCmd(), newAccountsAddCmdWithDeps(deps), newAccountsRemoveCmd(), newAccountUseCmd(), newAccountLoginCmd(deps), newAccountTestCmd(), newAccountModelsCmd(), newAccountUsageCmd())
 	for _, enabled := range []bool{true, false} {
 		cmd.AddCommand(newAccountEnabledCmd(enabled))
 	}
