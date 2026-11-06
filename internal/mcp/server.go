@@ -455,7 +455,10 @@ func (s *Server) handleListModels(ctx context.Context, args map[string]interface
 }
 
 func (s *Server) handleRepoMap(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
-	targetDir := s.resolvePath(args["path"])
+	targetDir, err := s.resolvePath(args["path"])
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
 
 	tokens := 2048
 	if tVal, ok := args["tokens"]; ok {
@@ -480,7 +483,10 @@ func (s *Server) handleRepoMap(ctx context.Context, args map[string]interface{})
 }
 
 func (s *Server) handleFindSymbol(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
-	targetDir := s.resolvePath(args["path"])
+	targetDir, err := s.resolvePath(args["path"])
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
 
 	nameVal, ok := args["name"]
 	if !ok {
@@ -539,7 +545,10 @@ func (s *Server) handleFindSymbol(ctx context.Context, args map[string]interface
 }
 
 func (s *Server) handleSearchCode(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
-	targetDir := s.resolvePath(args["path"])
+	targetDir, err := s.resolvePath(args["path"])
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
 
 	patVal, ok := args["pattern"]
 	if !ok {
@@ -583,7 +592,10 @@ func (s *Server) handleSearchCode(ctx context.Context, args map[string]interface
 }
 
 func (s *Server) handleProjectCommands(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
-	targetDir := s.resolvePath(args["path"])
+	targetDir, err := s.resolvePath(args["path"])
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
 
 	meta, err := codeintel.DetectProject(targetDir)
 	if err != nil {
@@ -622,15 +634,39 @@ func (s *Server) handleProjectCommands(ctx context.Context, args map[string]inte
 	return textResult(sb.String()), nil
 }
 
-func (s *Server) resolvePath(pathArg interface{}) string {
-	if pathArg != nil {
-		if pStr, ok := pathArg.(string); ok && strings.TrimSpace(pStr) != "" {
-			return filepath.Clean(strings.TrimSpace(pStr))
+// resolvePath places a code tool's optional path argument under the project root. A
+// relative path is taken from the root, no path means the root, and the result, with
+// symbolic links resolved, must stay inside the root: the agent policy contract denies
+// every out-of-root path, and these tools read files without being judged by it.
+func (s *Server) resolvePath(pathArg interface{}) (string, error) {
+	root := s.rootDir
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve project root: %w", err)
 		}
+		root = cwd
 	}
-	if s.rootDir != "" {
-		return s.rootDir
+	requested, _ := pathArg.(string)
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return root, nil
 	}
-	cwd, _ := os.Getwd()
-	return cwd
+	target := requested
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve project root: %w", err)
+	}
+	realTarget, err := filepath.EvalSymlinks(filepath.Clean(target))
+	if err != nil {
+		return "", fmt.Errorf("resolve path %s: %w", requested, err)
+	}
+	rel, err := filepath.Rel(realRoot, realTarget)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %s is outside the project root", requested)
+	}
+	return filepath.Join(root, rel), nil
 }
