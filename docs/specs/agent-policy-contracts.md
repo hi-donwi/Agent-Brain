@@ -127,10 +127,35 @@ wider than the parent's. A sub-agent cannot start another unless `subagent` is l
 name defined twice, the earlier wins and the clash is reported, so a repository cannot
 replace the operator's own role. A bad file is reported and does not stop the others.
 
+## Shared conformance vectors
+
+The versioned, language-neutral fixture is
+[`internal/agent/testdata/agent-policy-contract-v1.json`](../../internal/agent/testdata/agent-policy-contract-v1.json).
+It is UTF-8 JSON with `schema_version: 1` and five groups:
+
+| Group | Vector inputs | Expected result |
+|---|---|---|
+| `instructions` | Relative `files` map and a project-relative `directory` | Ordered `expected_files`, each with `path`, `content`, and `truncated` |
+| `permissions` | A `policy_yaml`, or both `trusted_policy_yaml` and `untrusted_policy_yaml`, plus a `request` | `expected` decision: `allow`, `ask`, or `deny` |
+| `invalid_policies` | A `policy_yaml` that must be rejected | Any validation error; error wording is not part of the contract |
+| `subagents` | Definition `file`, Markdown `definition`, `parent_policy_yaml`, and permission `requests` | Normalized `expected_definition` and each request's expected decision |
+| `invalid_subagents` | Definition `file` and Markdown `definition` that must be rejected | Any validation error; error wording is not part of the contract |
+
+Hosts can load the fixture directly and run the same cases against their own
+implementation. Each `id` is stable and unique within its group. Additive cases may be
+added without changing `schema_version`; changing the fixture shape or the meaning of an
+existing case requires a new version. Do not reuse IDs. A deliberate behavior change must
+update the contract and the affected expected result together.
+
+All paths in the fixture are relative to a fresh temporary project root. Permission
+`command` values are inputs to the decision function and **must never be executed**. The
+vectors test contract semantics, not the host's process isolation or approval UI; hosts
+must still enforce `deny`, obtain approval for `ask`, and isolate tool execution.
+
 ## Follow-up
 
 - Implemented: read-only MCP tools and `brain agent` inspection commands (see below).
-- Shared test vectors so a host in another language can check its implementation.
+- Implemented: shared version 1 policy contract vectors and Go conformance tests.
 - Per-role model routing, once the owner chooses a default (today the host picks per session).
 
 ## Inspection interfaces
