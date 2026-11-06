@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "instructions": [
+    {
+      "id": "root-first-nearest-last-with-per-directory-precedence",
+      "files": {
+        "AGENTS.md": "root guidance",
+        "CLAUDE.md": "lower-priority root file",
+        "GEMINI.md": "lowest-priority root file",
+        "service/CLAUDE.md": "service guidance",
+        "service/GEMINI.md": "lower-priority service file",
+        "service/api/GEMINI.md": "api guidance"
+      },
+      "directory": "service/api",
+      "expected_files": [
+        {"path": "AGENTS.md", "content": "root guidance", "truncated": false},
+        {"path": "service/CLAUDE.md", "content": "service guidance", "truncated": false},
+        {"path": "service/api/GEMINI.md", "content": "api guidance", "truncated": false}
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "id": "unmatched-request-uses-ask-default",
+      "policy_yaml": "default: ask\n",
+      "request": {"tool": "read", "path": "src/main.go"},
+      "expected": "ask"
+    },
+    {
+      "id": "most-restrictive-matching-rule-wins",
+      "policy_yaml": "default: deny\nrules:\n  - tool: read\n    path: '**'\n    decision: allow\n  - tool: read\n    path: 'secrets/**'\n    decision: deny\n",
+      "request": {"tool": "read", "path": "secrets/token.txt"},
+      "expected": "deny"
+    },
+    {
+      "id": "path-outside-root-is-denied",
+      "policy_yaml": "default: allow\nrules:\n  - tool: read\n    path: '**'\n    decision: allow\n",
+      "request": {"tool": "read", "path": "../outside.txt"},
+      "expected": "deny"
+    },
+    {
+      "id": "shell-prefix-matches-whole-tokens",
+      "policy_yaml": "default: ask\nrules:\n  - tool: shell\n    command: 'go test'\n    decision: allow\n",
+      "request": {"tool": "shell", "command": "go testx ./..."},
+      "expected": "ask"
+    },
+    {
+      "id": "every-chained-shell-command-is-checked",
+      "policy_yaml": "default: ask\nrules:\n  - tool: shell\n    command: 'go test'\n    decision: allow\n  - tool: shell\n    command: rm\n    decision: deny\n",
+      "request": {"tool": "shell", "command": "go test ./... && rm -rf build"},
+      "expected": "deny"
+    },
+    {
+      "id": "shell-redirection-needs-review",
+      "policy_yaml": "default: deny\nrules:\n  - tool: shell\n    command: echo\n    decision: allow\n",
+      "request": {"tool": "shell", "command": "echo safe > output.txt"},
+      "expected": "ask"
+    },
+    {
+      "id": "unknown-tool-is-denied",
+      "policy_yaml": "default: allow\n",
+      "request": {"tool": "process", "path": "main.go"},
+      "expected": "deny"
+    },
+    {
+      "id": "untrusted-policy-cannot-grant-permission",
+      "trusted_policy_yaml": "default: ask\n",
+      "untrusted_policy_yaml": "default: allow\nrules:\n  - tool: shell\n    command: rm\n    decision: allow\n",
+      "request": {"tool": "shell", "command": "rm -rf build"},
+      "expected": "ask"
+    }
+  ],
+  "invalid_policies": [
+    {
+      "id": "unknown-policy-tool-is-invalid",
+      "policy_yaml": "rules:\n  - tool: process\n    decision: allow\n"
+    },
+    {
+      "id": "unknown-policy-field-is-invalid",
+      "policy_yaml": "default: ask\nallow_all: true\n"
+    }
+  ],
+  "subagents": [
+    {
+      "id": "omitted-tools-default-to-read-only",
+      "file": "scout.md",
+      "definition": "---\nname: scout\ndescription: Inspects a project\n---\nReport relevant files.\n",
+      "parent_policy_yaml": "default: allow\n",
+      "expected_definition": {"name": "scout", "tools": ["read", "search"], "model": "", "max_turns": 20},
+      "requests": [
+        {"request": {"tool": "read", "path": "README.md"}, "expected": "allow"},
+        {"request": {"tool": "search", "path": "src/main.go"}, "expected": "allow"},
+        {"request": {"tool": "write", "path": "README.md"}, "expected": "deny"},
+        {"request": {"tool": "subagent"}, "expected": "deny"}
+      ]
+    },
+    {
+      "id": "subagent-cannot-exceed-parent-policy",
+      "file": "fixer.md",
+      "definition": "---\nname: fixer\ndescription: Makes a narrow fix\ntools: [read, edit]\nmodel: local/code\nmax_turns: 8\n---\nFix only the assigned issue.\n",
+      "parent_policy_yaml": "default: allow\nrules:\n  - tool: edit\n    path: '**'\n    decision: deny\n",
+      "expected_definition": {"name": "fixer", "tools": ["read", "edit"], "model": "local/code", "max_turns": 8},
+      "requests": [
+        {"request": {"tool": "read", "path": "src/main.go"}, "expected": "allow"},
+        {"request": {"tool": "edit", "path": "src/main.go"}, "expected": "deny"}
+      ]
+    },
+    {
+      "id": "explicit-empty-tools-means-no-tools",
+      "file": "thinker.md",
+      "definition": "---\nname: thinker\ndescription: Reasons without tools\ntools: []\n---\nReturn a short analysis.\n",
+      "parent_policy_yaml": "default: allow\n",
+      "expected_definition": {"name": "thinker", "tools": [], "model": "", "max_turns": 20},
+      "requests": [
+        {"request": {"tool": "read", "path": "README.md"}, "expected": "deny"}
+      ]
+    }
+  ],
+  "invalid_subagents": [
+    {
+      "id": "unknown-subagent-tool-is-invalid",
+      "file": "scout.md",
+      "definition": "---\nname: scout\ndescription: Inspects a project\ntools: [teleport]\n---\nReport relevant files.\n"
+    },
+    {
+      "id": "subagent-name-must-match-file-name",
+      "file": "reviewer.md",
+      "definition": "---\nname: scout\ndescription: Inspects a project\n---\nReport relevant files.\n"
+    }
+  ]
+}
