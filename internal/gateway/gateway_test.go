@@ -198,6 +198,17 @@ func TestMiddleware_Auth_and_Host(t *testing.T) {
 	}
 }
 
+// testResidency gives a test a fixed memory budget. Without it the gateway sizes
+// the budget from the memory of the machine running the test, and a 7B model is
+// refused on a small CI runner while it fits on a developer machine.
+func testResidency(adapter backend.Adapter) *residency.Manager {
+	return residency.New(residency.Config{
+		TotalBudget:    64 * 1024 * 1024 * 1024,
+		MaxConcurrency: 1,
+		Adapter:        adapter,
+	})
+}
+
 func TestOpenAIClientsShareOneChatContract(t *testing.T) {
 	token := "test-token"
 	adapter := &mockGatewayAdapter{
@@ -206,6 +217,7 @@ func TestOpenAIClientsShareOneChatContract(t *testing.T) {
 	s, err := gateway.NewServer(gateway.ServerConfig{
 		Token:       token,
 		Adapter:     adapter,
+		Residency:   testResidency(adapter),
 		AccountPool: router.NewAccountPool(router.DefaultRouterConfig()),
 		UserConfig: &home.Config{
 			Profile: "standard",
@@ -359,7 +371,7 @@ func TestGreetingIsNotRewrittenByGateway(t *testing.T) {
 		}
 		return &backend.ChatResponse{Message: backend.ChatMessage{Role: "assistant", Content: "Saya qwen2.5-coder:7b, dilayani oleh Agent Brain."}}, nil
 	}
-	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter})
+	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter, Residency: testResidency(adapter)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,8 +400,9 @@ func TestServer_ChatCompletionsAcceptsOpenAIContentParts(t *testing.T) {
 		},
 	}
 	s, err := gateway.NewServer(gateway.ServerConfig{
-		Token:   token,
-		Adapter: adapter,
+		Token:     token,
+		Adapter:   adapter,
+		Residency: testResidency(adapter),
 		UserConfig: &home.Config{
 			Profile: "tiny",
 			Aliases: map[string]string{"chat": "qwen2.5-coder-7b"},
