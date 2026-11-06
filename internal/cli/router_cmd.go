@@ -25,9 +25,9 @@ multi-account status, failover cooldowns, and tool result token compression.`,
 
 	cmd.AddCommand(newRouterStatusCmd())
 	cmd.AddCommand(newRouterOptimizeCmd())
-	cmd.AddCommand(&cobra.Command{Use: "strategy <priority|round-robin>", Short: "Choose the account-pool strategy", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if args[0] != "priority" && args[0] != "round-robin" {
-			return fmt.Errorf("strategy must be priority or round-robin")
+	cmd.AddCommand(&cobra.Command{Use: "strategy <priority|round-robin|weighted>", Short: "Choose the account-pool strategy", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if args[0] != "priority" && args[0] != "round-robin" && args[0] != "weighted" {
+			return fmt.Errorf("strategy must be priority, round-robin, or weighted")
 		}
 		path, err := accountsConfigPath()
 		if err != nil {
@@ -93,7 +93,11 @@ func newRouterStatusCmd() *cobra.Command {
 			if status == "" {
 				status = router.StatusConfigured
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s (priority %d)\n", status, a.Reference(), a.Priority)
+			weight := a.Weight
+			if weight == 0 {
+				weight = 1
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s (priority %d, weight %d)\n", status, a.Reference(), a.Priority, weight)
 		}
 		return nil
 	}}

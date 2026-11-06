@@ -66,7 +66,7 @@ func newAccountsListCmd() *cobra.Command {
 			return err
 		}
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ACCOUNT\tAUTH\tSTATUS\tCLI\tGATEWAY\tDEFAULT")
+		fmt.Fprintln(w, "ACCOUNT\tAUTH\tSTATUS\tCLI\tGATEWAY\tDEFAULT\tWEIGHT")
 		for _, a := range accounts {
 			auth := a.Auth
 			if auth == "" {
@@ -79,7 +79,11 @@ func newAccountsListCmd() *cobra.Command {
 			if !a.Enabled {
 				status = router.StatusDisabled
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%t\t%t\n", a.Reference(), auth, status, a.CLIReady, a.GatewayReady, cfg.Defaults[a.Provider] == a.ID)
+			weight := a.Weight
+			if weight == 0 {
+				weight = 1
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%t\t%t\t%d\n", a.Reference(), auth, status, a.CLIReady, a.GatewayReady, cfg.Defaults[a.Provider] == a.ID, weight)
 		}
 		return w.Flush()
 	}}
@@ -187,6 +191,7 @@ func newAccountsAddCmdWithDeps(deps AccountDeps) *cobra.Command {
 	f.BoolVar(&keyStdin, "key-stdin", false, "Read a secret from stdin without printing it")
 	f.StringVar(&a.Tier, "tier", "", "Routing tier: subscription, cheap, free, local")
 	f.IntVar(&a.Priority, "priority", 1, "Routing priority; smaller is preferred")
+	f.IntVar(&a.Weight, "weight", 1, "Routing weight for weighted strategy (1-1000)")
 	f.StringVar(&a.BaseURL, "base-url", "", "Explicit upstream base URL (host or /v1 root)")
 	f.StringSliceVar(&a.Models, "models", nil, "Allowed model IDs, comma separated")
 	f.StringSliceVar(&a.Protocols, "protocols", nil, "Supported protocols: chat,responses,messages,gemini")

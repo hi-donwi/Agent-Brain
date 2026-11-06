@@ -7,6 +7,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -86,39 +87,67 @@ type ProcessInfo struct {
 
 // ChatMessage is one turn in a conversation.
 type ChatMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
+}
+
+// ToolCall is a function invocation exchanged with an OpenAI-compatible client.
+type ToolCall struct {
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type,omitempty"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction identifies a callable function and its JSON arguments or schema.
+type ToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Arguments   json.RawMessage `json:"arguments,omitempty"`
 }
 
 // ChatChunk is one incremental delta token received during streaming generation.
 type ChatChunk struct {
-	Role            string `json:"role,omitempty"`
-	Content         string `json:"content"`
-	Reasoning       string `json:"reasoning,omitempty"`
-	Done            bool   `json:"done"`
-	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
-	EvalCount       int    `json:"eval_count,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	Content         string     `json:"content"`
+	Reasoning       string     `json:"reasoning,omitempty"`
+	ToolCalls       []ToolCall `json:"tool_calls,omitempty"`
+	DoneReason      string     `json:"done_reason,omitempty"`
+	Done            bool       `json:"done"`
+	PromptEvalCount int        `json:"prompt_eval_count,omitempty"`
+	EvalCount       int        `json:"eval_count,omitempty"`
 }
 
 // ChatOptions sets runtime inference parameters.
 type ChatOptions struct {
-	NumCtx      int     `json:"num_ctx,omitempty"`
-	Temperature float64 `json:"temperature,omitempty"`
+	NumCtx         int      `json:"num_ctx,omitempty"`
+	Temperature    float64  `json:"temperature,omitempty"`
+	TemperatureSet bool     `json:"-"`
+	NumPredict     int      `json:"num_predict,omitempty"`
+	Stop           []string `json:"stop,omitempty"`
+	TopP           *float64 `json:"top_p,omitempty"`
+	Seed           *int     `json:"seed,omitempty"`
 }
 
 // ChatRequest configures a chat completion.
 type ChatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []ChatMessage `json:"messages"`
-	Options   *ChatOptions  `json:"options,omitempty"`
-	Think     *bool         `json:"think,omitempty"`
-	KeepAlive string        `json:"keep_alive,omitempty"`
+	Model     string          `json:"model"`
+	Messages  []ChatMessage   `json:"messages"`
+	Options   *ChatOptions    `json:"options,omitempty"`
+	Think     *bool           `json:"think,omitempty"`
+	KeepAlive string          `json:"keep_alive,omitempty"`
+	Tools     json.RawMessage `json:"tools,omitempty"`
+	Format    json.RawMessage `json:"format,omitempty"`
 }
 
 // ChatResponse holds the completed turn and generation timing.
 type ChatResponse struct {
 	Model              string        `json:"model"`
+	DoneReason         string        `json:"done_reason,omitempty"`
 	Message            ChatMessage   `json:"message"`
 	TotalDuration      time.Duration `json:"total_duration"`
 	LoadDuration       time.Duration `json:"load_duration"`

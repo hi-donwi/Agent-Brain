@@ -19,6 +19,7 @@ func NewAccountPool(cfg RouterConfig) *AccountPool {
 		strategy:       cfg.Strategy,
 		maxCooldownSec: cfg.MaxCooldownSec,
 		rrIndices:      make(map[string]int),
+		weightedStates: make(map[string]map[string]int),
 		accounts:       make([]*Account, len(cfg.Accounts)),
 	}
 	if p.maxCooldownSec <= 0 {
@@ -30,6 +31,9 @@ func NewAccountPool(cfg RouterConfig) *AccountPool {
 	for i, a := range cfg.Accounts {
 		cp := *copyAccount(&a)
 		cp.Provider = NormalizeProvider(cp.Provider)
+		if cp.Weight == 0 {
+			cp.Weight = 1
+		}
 		if cp.Status == "" {
 			cp.Status = StatusConfigured
 		}
@@ -45,6 +49,9 @@ func (p *AccountPool) AddAccount(acc Account) {
 
 	acc.Provider = NormalizeProvider(acc.Provider)
 	acc = *copyAccount(&acc)
+	if acc.Weight == 0 {
+		acc.Weight = 1
+	}
 	if acc.Status == "" {
 		acc.Status = StatusConfigured
 	}
@@ -52,10 +59,12 @@ func (p *AccountPool) AddAccount(acc Account) {
 	for i, existing := range p.accounts {
 		if existing.ID == acc.ID {
 			p.accounts[i] = &acc
+			delete(p.weightedStates, acc.Provider)
 			return
 		}
 	}
 	p.accounts = append(p.accounts, &acc)
+	delete(p.weightedStates, acc.Provider)
 }
 
 // RemoveAccount deletes an account by ID.
@@ -65,7 +74,9 @@ func (p *AccountPool) RemoveAccount(id string) bool {
 
 	for i, existing := range p.accounts {
 		if existing.ID == id {
+			provider := existing.Provider
 			p.accounts = append(p.accounts[:i], p.accounts[i+1:]...)
+			delete(p.weightedStates, provider)
 			return true
 		}
 	}
@@ -89,7 +100,7 @@ func (p *AccountPool) ListAccounts() []Account {
 	return res
 }
 
-// SelectAccount chooses an active account for the specified provider based on tier, priority, or round-robin.
+// SelectAccount chooses an active account for the specified provider using the configured strategy.
 func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
 	return p.selectAccount(provider, "", nil)
 }
@@ -133,6 +144,9 @@ func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bo
 		p.rrIndices[provider] = (idx + 1) % len(candidates)
 		return copyAccount(candidates[idx]), nil
 	}
+	if p.strategy == "weighted" {
+		return copyAccount(p.selectWeighted(provider, candidates)), nil
+	}
 
 	// Priority order: Tier weight (subscription > cheap > free > local) then Priority int
 	tierRank := func(tier string) int {
@@ -160,6 +174,38 @@ func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bo
 	})
 
 	return copyAccount(candidates[0]), nil
+}
+
+// selectWeighted applies smooth weighted round-robin among currently eligible accounts.
+// Candidates are visited in config order, making ties deterministic and testable.
+func (p *AccountPool) selectWeighted(provider string, candidates []*Account) *Account {
+	state := p.weightedStates[provider]
+	if state == nil {
+		state = make(map[string]int)
+		p.weightedStates[provider] = state
+	}
+	eligible := make(map[string]bool, len(candidates))
+	totalWeight := 0
+	var selected *Account
+	for _, account := range candidates {
+		eligible[account.ID] = true
+		weight := account.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		state[account.ID] += weight
+		totalWeight += weight
+		if selected == nil || state[account.ID] > state[selected.ID] {
+			selected = account
+		}
+	}
+	for id := range state {
+		if !eligible[id] {
+			delete(state, id)
+		}
+	}
+	state[selected.ID] -= totalWeight
+	return selected
 }
 
 func copyAccount(a *Account) *Account {

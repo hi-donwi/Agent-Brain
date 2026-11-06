@@ -29,6 +29,7 @@ func TestConfig_RoundTrip(t *testing.T) {
 			"embed": "nomic-embed-text",
 		},
 		SkillSources: []string{".agents/skills"},
+		Inference:    home.InferenceConfig{ContextLength: 8192, MaxOutputTokens: 2048, MaxConcurrency: 1},
 	}
 
 	if err := home.SaveConfig(cfgPath, initial); err != nil {
@@ -61,6 +62,22 @@ func TestConfig_RoundTrip(t *testing.T) {
 	}
 	if !loaded.Backends["ollama"].Enabled {
 		t.Errorf("expected ollama backend enabled")
+	}
+	if loaded.Inference != initial.Inference {
+		t.Fatalf("inference limits lost: %+v", loaded.Inference)
+	}
+}
+
+func TestInferenceLimitsRejectInvalidBudgets(t *testing.T) {
+	for _, limits := range []home.InferenceConfig{
+		{ContextLength: -1}, {MaxOutputTokens: -1}, {MaxConcurrency: -1},
+		{ContextLength: 1024, MaxOutputTokens: 1024},
+	} {
+		cfg := home.DefaultConfig("standard", map[string]string{"chat": "devstral-small-2:24b"})
+		cfg.Inference = limits
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid limits accepted: %+v", limits)
+		}
 	}
 }
 

@@ -22,6 +22,23 @@ func TestAuditRejectUnsupportedAccountProvider(t *testing.T) {
 	}
 }
 
+func TestAccountsAddPersistsRoutingWeight(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOKAL_HOME", root)
+	cmd := newAccountsAddCmd()
+	cmd.SetArgs([]string{"openai", "--name", "weighted", "--key", "env:OPENAI_KEY", "--weight", "7", "--no-login"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := router.LoadRouterConfig(filepath.Join(root, "accounts.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Accounts[0].Weight != 7 {
+		t.Fatalf("weight = %d, want 7", cfg.Accounts[0].Weight)
+	}
+}
+
 func TestAccountWizardAndScriptShareValidation(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("LOKAL_HOME", root)

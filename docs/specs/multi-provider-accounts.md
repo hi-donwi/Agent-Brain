@@ -235,10 +235,11 @@ legacy credentials during migration.
   routing context; resolve and validate it server-side. A profile directory alone
   does not pin a gateway account.
 - Pinning is strict. Cross-account fallback requires an explicit opt-in. Pool
-  routing can use priority or round-robin among eligible accounts of the selected
-  provider, honoring cooldowns and a bounded retry/deadline policy that can reach
-  accounts beyond the first three. Respect `Retry-After` and avoid repeated
-  attempts to an already failed candidate within a request.
+  routing can use priority, round-robin, or smooth weighted round-robin among
+  eligible accounts of the selected provider, honoring cooldowns and a bounded
+  retry/deadline policy that can reach accounts beyond the first three. Respect
+  `Retry-After` and avoid repeated attempts to an already failed candidate within
+  a request.
 - Cross-provider fallback is separately configured. Never substitute AI Studio
   for Antigravity or local inference for an unsupported provider.
 - Strip local gateway credentials, account selectors, and hop-by-hop headers

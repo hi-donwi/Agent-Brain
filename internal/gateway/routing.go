@@ -68,6 +68,9 @@ func (s *Server) tryProxy(w http.ResponseWriter, r *http.Request, body []byte, p
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return false
 	}
+	if s.proxy == nil && accountSelection(r) == "" && r.Header.Get("X-Brain-Provider") == "" {
+		return false
+	}
 	var model string
 	_ = json.Unmarshal(payload["model"], &model)
 	targetPath := r.URL.Path
@@ -114,6 +117,9 @@ func (s *Server) tryProxy(w http.ResponseWriter, r *http.Request, body []byte, p
 		provider = a.Provider
 		pinned = a.ID
 		explicit = true
+	}
+	if explicit && pinned == "" && r.Header.Get("X-Brain-Provider") == "" && (s.cfg.AccountPool == nil || !s.cfg.AccountPool.HasProvider(provider)) {
+		return false
 	}
 	if !explicit && (s.proxy == nil || !s.cfg.AccountPool.HasProvider(provider)) {
 		return false

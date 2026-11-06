@@ -56,6 +56,8 @@ func TestAccountServiceValidatesAndMigrates(t *testing.T) {
 		{Name: "work", Provider: ProviderClaudeCode, Auth: AuthOAuth},
 		{Name: "work", Provider: ProviderOpenAI, APIKey: "env:"},
 		{Name: "work", Provider: ProviderOpenAI, APIKey: "fake\ninvalid"},
+		{Name: "work", Provider: ProviderOpenAI, APIKey: "fake", Weight: -1},
+		{Name: "work", Provider: ProviderOpenAI, APIKey: "fake", Weight: MaxAccountWeight + 1},
 		{Name: "work", Provider: ProviderAntigravity, Auth: AuthOAuth, APIKey: "env:INFERENCE", BridgeKey: "env:MANAGEMENT", BaseURL: "http://127.0.0.1:8317", BridgeURL: "http://127.0.0.1:8318/v8/management"},
 	} {
 		if _, err := s.Add(context.Background(), a); err == nil {
@@ -76,6 +78,21 @@ func TestAccountServiceValidatesAndMigrates(t *testing.T) {
 	cfg, err := LoadRouterConfig(s.Path)
 	if err != nil || cfg.Defaults[ProviderGemini] != "old" {
 		t.Fatalf("default: %v", err)
+	}
+}
+
+func TestLoadRouterConfigAcceptsWeightedStrategy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounts.yaml")
+	data := "strategy: weighted\naccounts:\n  - id: first\n    name: first\n    provider: openai\n    api_key: env:OPENAI_KEY\n    enabled: true\n    weight: 4\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadRouterConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Strategy != "weighted" || cfg.Accounts[0].Weight != 4 {
+		t.Fatalf("weighted routing config was not preserved: %#v", cfg)
 	}
 }
 

@@ -63,9 +63,10 @@ func (m *mockGatewayAdapter) ChatStream(ctx context.Context, req backend.ChatReq
 	}
 	if onChunk != nil && m.chatResp != nil {
 		_ = onChunk(backend.ChatChunk{
-			Role:    m.chatResp.Message.Role,
-			Content: m.chatResp.Message.Content,
-			Done:    false,
+			Role:      m.chatResp.Message.Role,
+			Content:   m.chatResp.Message.Content,
+			ToolCalls: m.chatResp.Message.ToolCalls,
+			Done:      false,
 		})
 		_ = onChunk(backend.ChatChunk{
 			Done:            true,
@@ -194,6 +195,238 @@ func TestMiddleware_Auth_and_Host(t *testing.T) {
 	wildcardHandler.ServeHTTP(recWildcard, reqWildcard)
 	if recWildcard.Code != http.StatusOK {
 		t.Errorf("expected 200 for wildcard host, got %d", recWildcard.Code)
+	}
+}
+
+func TestOpenAIClientsShareOneChatContract(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{Message: backend.ChatMessage{Role: "assistant", Content: "ok"}},
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Token:       token,
+		Adapter:     adapter,
+		AccountPool: router.NewAccountPool(router.DefaultRouterConfig()),
+		UserConfig: &home.Config{
+			Profile: "standard",
+			Aliases: map[string]string{"code": "qwen2.5-coder-7b", "chat": "qwen2.5-coder-7b"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		body string
+		want func(*testing.T, *backend.ChatRequest)
+	}{
+		{
+			name: "aider string content and prefixed model",
+			body: `{"model":"openai/code","temperature":0,"max_completion_tokens":32,"stop":"\n\n","messages":[{"role":"user","content":"ping"}]}`,
+			want: func(t *testing.T, req *backend.ChatRequest) {
+				if req.Model != "qwen2.5-coder:7b" || req.Options == nil || req.Options.NumPredict != 32 || len(req.Options.Stop) != 1 {
+					t.Fatalf("aider request = %+v", req)
+				}
+			},
+		},
+		{
+			name: "continue stop array and stream",
+			body: `{"model":"chat","stream":true,"stop":["</s>"],"messages":[{"role":"user","content":"hi"}]}`,
+			want: func(t *testing.T, req *backend.ChatRequest) {
+				if req.Options == nil || len(req.Options.Stop) != 1 || req.Options.Stop[0] != "</s>" {
+					t.Fatalf("continue stop = %+v", req.Options)
+				}
+			},
+		},
+		{
+			name: "kilo and opencode tools",
+			body: `{"model":"qwen2.5-coder:7b","tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}],"messages":[{"role":"developer","content":"use tools"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"file"}]}]}`,
+			want: func(t *testing.T, req *backend.ChatRequest) {
+				msgs := req.Messages
+				if len(msgs) > 0 && strings.Contains(msgs[0].Content, "Never print raw JSON") {
+					msgs = msgs[1:]
+				}
+				if len(req.Tools) == 0 || len(msgs) != 3 || msgs[0].Role != "system" || msgs[1].ToolCalls[0].Function.Name != "read_file" || msgs[2].ToolCallID != "call_1" || msgs[2].Content != "file" {
+					t.Fatalf("tool request = %+v", req.Messages)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter.chatReq = nil
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(tc.body))
+			req.Host = "127.0.0.1"
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+			}
+			if adapter.chatReq == nil {
+				t.Fatal("backend was not called")
+			}
+			tc.want(t, adapter.chatReq)
+		})
+	}
+}
+
+func TestIncompleteToolMarkupIsNotExecuted(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{Message: backend.ChatMessage{
+			Role:    "assistant",
+			Content: "Saya akan memeriksa proyek Hikari untuk Anda. Saya perlu melihat struktur file dan konten proyeknya terlebih dahulu.\n<function=glob> <parameter=pattern> **",
+		}},
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"qwen3-coder:30b","stream":true,"tools":[{"type":"function","function":{"name":"glob","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"bisa periksa project hikari"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"finish_reason":"tool_calls"`) {
+		t.Fatalf("incomplete markup was promoted to an executable call: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestToolMarkupRemainsModelText(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{Message: backend.ChatMessage{
+			Role: "assistant",
+			Content: "Saya akan memeriksa proyek Hikari untuk Anda.\n" +
+				"<function=glob>\n<parameter=pattern>\n**\n</parameter>\n</function>\n</tool_call>",
+		}},
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"qwen3-coder:30b","tools":[{"type":"function","function":{"name":"glob","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"bisa periksa project hikari"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"finish_reason":"tool_calls"`) {
+		t.Fatalf("text was promoted to a native call: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `pattern`) || !strings.Contains(rec.Body.String(), `**`) {
+		t.Fatalf("parameter missing: %s", rec.Body.String())
+	}
+}
+
+func TestJSONOutputIsNotExecutedAsTool(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{Message: backend.ChatMessage{
+			Role:    "assistant",
+			Content: `{"name":"shell","arguments":{"command":"ws route --project hikari"}}`,
+		}},
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"qwen3-coder:30b","tools":[{"type":"function","function":{"name":"shell","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"bisa periksa project hikari"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"finish_reason":"tool_calls"`) || strings.Contains(rec.Body.String(), "dilayani oleh Agent Brain") {
+		t.Fatalf("model text was reinterpreted: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(adapter.chatReq.Messages) != 1 {
+		t.Fatalf("unexpected injected policy: %+v", adapter.chatReq.Messages)
+	}
+}
+
+func TestGreetingIsNotRewrittenByGateway(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{}
+	adapter.chatFunc = func(_ context.Context, req backend.ChatRequest) (*backend.ChatResponse, error) {
+		if len(req.Tools) > 0 {
+			return &backend.ChatResponse{Message: backend.ChatMessage{Role: "assistant", Content: "hi\n{\"name\":\"task\",\"arguments\":{\"prompt\":\"describe the task\"}}"}}, nil
+		}
+		return &backend.ChatResponse{Message: backend.ChatMessage{Role: "assistant", Content: "Saya qwen2.5-coder:7b, dilayani oleh Agent Brain."}}, nil
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{Token: token, Adapter: adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"qwen2.5-coder:7b","tools":[{"type":"function","function":{"name":"task","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"halo, model apa ini?"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"finish_reason":"tool_calls"`) {
+		t.Fatalf("text promoted to tool call: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "describe the task") {
+		t.Fatalf("model output was silently rewritten: %s", rec.Body.String())
+	}
+}
+
+func TestServer_ChatCompletionsAcceptsOpenAIContentParts(t *testing.T) {
+	token := "test-token"
+	adapter := &mockGatewayAdapter{
+		chatResp: &backend.ChatResponse{
+			Message: backend.ChatMessage{Role: "assistant", Content: "ok"},
+		},
+	}
+	s, err := gateway.NewServer(gateway.ServerConfig{
+		Token:   token,
+		Adapter: adapter,
+		UserConfig: &home.Config{
+			Profile: "tiny",
+			Aliases: map[string]string{"chat": "qwen2.5-coder-7b"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{
+		"model":"chat",
+		"stream":false,
+		"messages":[
+			{"role":"system","content":[{"type":"text","text":"Be brief."}]},
+			{"role":"user","content":[{"type":"text","text":"First."},{"type":"text","text":"Second."}]},
+			{"role":"assistant","content":null}
+		]
+	}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("content parts rejected: %d %s", rec.Code, rec.Body.String())
+	}
+	if adapter.chatReq == nil || len(adapter.chatReq.Messages) != 3 {
+		t.Fatalf("messages not forwarded: %+v", adapter.chatReq)
+	}
+	if adapter.chatReq.Messages[0].Content != "Be brief." {
+		t.Errorf("system content = %q", adapter.chatReq.Messages[0].Content)
+	}
+	if adapter.chatReq.Messages[1].Content != "First.\nSecond." {
+		t.Errorf("user content = %q", adapter.chatReq.Messages[1].Content)
+	}
+	if adapter.chatReq.Messages[2].Content != "" {
+		t.Errorf("null content = %q", adapter.chatReq.Messages[2].Content)
 	}
 }
 
@@ -407,8 +640,9 @@ func TestServer_ChatCompletions_Streaming(t *testing.T) {
 	}
 
 	body := map[string]interface{}{
-		"model":  "chat",
-		"stream": true,
+		"model":          "chat",
+		"stream":         true,
+		"stream_options": map[string]bool{"include_usage": true},
 		"messages": []map[string]string{
 			{"role": "user", "content": "hi"},
 		},

@@ -44,7 +44,7 @@ func LoadRouterConfig(path string) (RouterConfig, error) {
 		}
 		ids[a.ID] = true
 	}
-	if cfg.Strategy != "priority" && cfg.Strategy != "round-robin" {
+	if cfg.Strategy != "priority" && cfg.Strategy != "round-robin" && cfg.Strategy != "weighted" {
 		return RouterConfig{}, fmt.Errorf("invalid router strategy")
 	}
 	return cfg, nil

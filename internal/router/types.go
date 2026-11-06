@@ -26,6 +26,8 @@ const (
 	TierLocal        = "local"        // Self-hosted local inference
 )
 
+const MaxAccountWeight = 1000
+
 // AccountStatus represents the operational readiness of an account.
 type AccountStatus string
 
@@ -46,8 +48,9 @@ type Account struct {
 	Provider         string            `json:"provider" yaml:"provider"`   // anthropic, openai, gemini, etc.
 	APIKey           string            `json:"-" yaml:"api_key,omitempty"` // legacy raw key, env:NAME, or file:PATH
 	BaseURL          string            `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	Tier             string            `json:"tier" yaml:"tier"`         // subscription, cheap, free, local
-	Priority         int               `json:"priority" yaml:"priority"` // lower number = higher priority
+	Tier             string            `json:"tier" yaml:"tier"`                         // subscription, cheap, free, local
+	Priority         int               `json:"priority" yaml:"priority"`                 // lower number = higher priority
+	Weight           int               `json:"weight,omitempty" yaml:"weight,omitempty"` // positive share for weighted routing; default 1
 	Enabled          bool              `json:"enabled" yaml:"enabled"`
 	Status           AccountStatus     `json:"status" yaml:"status"`
 	Cooldown         time.Time         `json:"cooldown,omitempty" yaml:"cooldown,omitempty"`
@@ -68,7 +71,7 @@ type Account struct {
 // RouterConfig holds settings for multi-account routing, auto-fallback, and token saver.
 type RouterConfig struct {
 	Accounts       []Account         `json:"accounts" yaml:"accounts"`
-	Strategy       string            `json:"strategy" yaml:"strategy"` // priority, round-robin
+	Strategy       string            `json:"strategy" yaml:"strategy"` // priority, round-robin, weighted
 	TokenSaver     bool              `json:"token_saver" yaml:"token_saver"`
 	MaxCooldownSec int               `json:"max_cooldown_sec" yaml:"max_cooldown_sec"`
 	Defaults       map[string]string `json:"defaults,omitempty" yaml:"defaults,omitempty"`
@@ -90,5 +93,6 @@ type AccountPool struct {
 	accounts       []*Account
 	strategy       string
 	maxCooldownSec int
-	rrIndices      map[string]int // provider -> round-robin pointer
+	rrIndices      map[string]int            // provider -> round-robin pointer
+	weightedStates map[string]map[string]int // provider -> account ID -> smooth weighted state
 }
