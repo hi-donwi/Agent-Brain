@@ -157,22 +157,27 @@ Token estimation endpoint to assist agent hosts in budgeting context windows:
 ### Tools:
 | Tool Name | Parameters | Description |
 |---|---|---|
-| `search_knowledge` | `query` (str), `limit` (int) | Vector and lexical search over indexed collections |
-| `list_skills` | `query` (str) | Lists available Agent Skills |
-| `get_skill` | `name` (str) | Retrieves `SKILL.md` body and instructions |
+| `search_knowledge` | `query` (str, required), `collection` (str), `limit` (int) | Vector and lexical search over indexed collections |
+| `list_skills` | - | Lists available Agent Skills |
+| `get_skill` | `name` (str, required), `reference` (str) | Retrieves `SKILL.md` body and instructions, or one file under `references/` |
 | `list_models` | - | Lists installed backend models and aliases |
-| `repo_map` | `path` (str), `budget` (int) | Ranked symbol outline fitting token budget |
-| `find_symbol` | `name` (str), `path` (str) | Finds symbol definitions and references |
-| `search_code` | `pattern` (str), `path` (str) | Regular expression search across source files |
+| `repo_map` | `tokens` (int), `path` (str) | Ranked symbol outline fitting token budget |
+| `find_symbol` | `name` (str, required), `limit` (int), `path` (str) | Finds symbol definitions and references |
+| `search_code` | `pattern` (str, required), `limit` (int), `path` (str) | Regular expression search across source files |
 | `project_commands` | `path` (str) | Detects build, test, and lint commands |
 | `project_instructions` | `directory` (str) | Reads bounded project instruction files inside the configured root |
 | `check_tool_permission` | `tool` (str, required), `path` (str), `command` (str), `role` (str) | Judges a tool request with the operator policy; returns allow, ask, or deny |
 | `list_subagents` | - | Lists sub-agent role definitions; operator definitions take precedence |
 
+The `path` of `repo_map`, `find_symbol`, `search_code`, and `project_commands` names a
+directory inside the project root (`mcp --root`, by default the working directory). A
+relative path is taken from the root, and no path means the root. A path that resolves
+outside the root, through `..` or a symbolic link, is a tool error.
+
 ### Resources:
-- `project://instructions`: Returns project instruction documents (`AGENTS.md`, `CLAUDE.md`).
-- `project://commands`: Returns detected build and test scripts as structured JSON.
-- `skills://list`: Returns catalog of available skills.
+- One resource per instruction file in the project root (`AGENTS.md`, `CLAUDE.md`,
+  `GEMINI.md`, `.cursorrules`, `.workspace-instructions.md`), with a `file:///` URI and
+  MIME type `text/markdown`.
 
 ---
 
