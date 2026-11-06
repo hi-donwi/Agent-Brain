@@ -9,13 +9,17 @@ and their respective open-source licenses. All dependencies use permissive licen
 
 ## Direct Dependencies
 
+### github.com/google/jsonschema-go
+- **License:** MIT License
+- **Copyright:** Copyright (c) 2025 JSON Schema Go Project Authors
+
 ### github.com/google/uuid
 - **License:** BSD 3-Clause "New" or "Revised" License
 - **Copyright:** Copyright (c) 2009, 2014 Google Inc. All rights reserved.
 
-### github.com/mark3labs/mcp-go
-- **License:** MIT License
-- **Copyright:** Copyright (c) 2024 Mark3Labs
+### github.com/modelcontextprotocol/go-sdk
+- **License:** Apache License 2.0, with contributions not yet relicensed remaining under the MIT License
+- **Copyright:** Copyright 2025 The Go MCP SDK Authors; Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC.
 
 ### github.com/spf13/cobra
 - **License:** Apache License 2.0
@@ -57,11 +61,23 @@ and their respective open-source licenses. All dependencies use permissive licen
 - **License:** BSD 3-Clause License
 - **Copyright:** Copyright (c) 2012 Remy Oudompheng
 
+### github.com/segmentio/asm
+- **License:** MIT License
+- **Copyright:** Copyright (c) 2021 Segment
+
+### github.com/segmentio/encoding
+- **License:** MIT License
+- **Copyright:** Copyright (c) 2019 Segment.io, Inc.
+
 ### github.com/spf13/pflag
 - **License:** BSD 3-Clause License
 - **Copyright:** Copyright (c) 2012 Alex Ogier. All rights reserved. Copyright (c) 2012 The Go Authors.
 
-### golang.org/x/sys & golang.org/x/exp
+### github.com/yosida95/uritemplate/v3
+- **License:** BSD 3-Clause License
+- **Copyright:** Copyright (C) 2016, Kohei YOSHIDA <https://yosida95.com/>. All rights reserved.
+
+### golang.org/x/exp, golang.org/x/oauth2, golang.org/x/sync, golang.org/x/sys, golang.org/x/time
 - **License:** BSD 3-Clause License
 - **Copyright:** Copyright 2009 The Go Authors. All rights reserved.
 

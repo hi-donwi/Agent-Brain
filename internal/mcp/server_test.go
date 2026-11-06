@@ -12,7 +12,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/rag"
 	"github.com/hi-donwi/Agent-Brain/internal/skills"
 	"github.com/hi-donwi/Agent-Brain/internal/store"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type mockAdapter struct {
@@ -164,7 +164,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if len(resSkills.Content) == 0 {
 		t.Fatal("expected content in list_skills result")
 	}
-	textVal := resSkills.Content[0].(mcp.TextContent).Text
+	textVal := resSkills.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textVal, "test-skill") {
 		t.Errorf("expected list_skills to contain test-skill, got: %s", textVal)
 	}
@@ -176,7 +176,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call get_skill failed: %v", err)
 	}
-	textBody := resGetSkill.Content[0].(mcp.TextContent).Text
+	textBody := resGetSkill.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textBody, "Follow step 1 and step 2.") {
 		t.Errorf("expected skill body, got: %s", textBody)
 	}
@@ -192,7 +192,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call get_skill reference failed: %v", err)
 	}
-	textRef := resGetRef.Content[0].(mcp.TextContent).Text
+	textRef := resGetRef.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textRef, "Guide Reference Content") {
 		t.Errorf("expected reference content, got: %s", textRef)
 	}
@@ -205,7 +205,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call search_knowledge failed: %v", err)
 	}
-	textSearch := resSearch.Content[0].(mcp.TextContent).Text
+	textSearch := resSearch.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textSearch, "[File: docs/sample.md:1-5]") {
 		t.Errorf("expected citation in search results, got: %s", textSearch)
 	}
@@ -215,7 +215,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call list_models failed: %v", err)
 	}
-	textModels := resModels.Content[0].(mcp.TextContent).Text
+	textModels := resModels.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textModels, "llama3.2:3b") || !strings.Contains(textModels, "chat") {
 		t.Errorf("expected models and aliases, got: %s", textModels)
 	}
@@ -227,7 +227,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call repo_map failed: %v", err)
 	}
-	textRepoMap := resRepoMap.Content[0].(mcp.TextContent).Text
+	textRepoMap := resRepoMap.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textRepoMap, "Worker") {
 		t.Errorf("expected repo_map to contain Worker symbol, got: %s", textRepoMap)
 	}
@@ -239,7 +239,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call find_symbol failed: %v", err)
 	}
-	textFindSym := resFindSym.Content[0].(mcp.TextContent).Text
+	textFindSym := resFindSym.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textFindSym, "service.go") || !strings.Contains(textFindSym, "Process") {
 		t.Errorf("expected find_symbol to locate Process, got: %s", textFindSym)
 	}
@@ -251,7 +251,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call search_code failed: %v", err)
 	}
-	textSearchCode := resSearchCode.Content[0].(mcp.TextContent).Text
+	textSearchCode := resSearchCode.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textSearchCode, "service.go") {
 		t.Errorf("expected search_code to locate service.go, got: %s", textSearchCode)
 	}
@@ -261,7 +261,7 @@ func TestMCPToolsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call project_commands failed: %v", err)
 	}
-	textProjCmds := resProjCmds.Content[0].(mcp.TextContent).Text
+	textProjCmds := resProjCmds.Content[0].(*mcp.TextContent).Text
 	if !strings.Contains(textProjCmds, "make test") || !strings.Contains(textProjCmds, "AGENTS.md") {
 		t.Errorf("expected project commands and instructions, got: %s", textProjCmds)
 	}

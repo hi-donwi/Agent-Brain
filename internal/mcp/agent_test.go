@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/hi-donwi/Agent-Brain/internal/agent"
-	protocol "github.com/mark3labs/mcp-go/mcp"
+	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestAgentToolsAreScopedAndNeverAcceptCallerPermissions(t *testing.T) {
@@ -22,7 +22,7 @@ func TestAgentToolsAreScopedAndNeverAcceptCallerPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.IsError || !strings.Contains(result.Content[0].(protocol.TextContent).Text, "Use Go") {
+	if result.IsError || !strings.Contains(result.Content[0].(*protocol.TextContent).Text, "Use Go") {
 		t.Fatalf("unexpected instructions: %+v", result)
 	}
 	result, err = s.CallTool(context.Background(), "project_instructions", map[string]interface{}{"directory": ".."})
@@ -34,7 +34,7 @@ func TestAgentToolsAreScopedAndNeverAcceptCallerPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decision map[string]interface{}
-	if err := json.Unmarshal([]byte(result.Content[0].(protocol.TextContent).Text), &decision); err != nil {
+	if err := json.Unmarshal([]byte(result.Content[0].(*protocol.TextContent).Text), &decision); err != nil {
 		t.Fatal(err)
 	}
 	if decision["decision"] != "ask" {
@@ -48,7 +48,7 @@ func TestAgentToolsAreScopedAndNeverAcceptCallerPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Content[0].(protocol.TextContent).Text, `"deny"`) {
+	if !strings.Contains(result.Content[0].(*protocol.TextContent).Text, `"deny"`) {
 		t.Fatal("out-of-root path was not denied")
 	}
 }
@@ -72,7 +72,7 @@ func TestSubagentCannotWidenOperatorPolicy(t *testing.T) {
 			t.Fatalf("decision failed: %v %+v", err, result)
 		}
 		var value map[string]interface{}
-		if err := json.Unmarshal([]byte(result.Content[0].(protocol.TextContent).Text), &value); err != nil {
+		if err := json.Unmarshal([]byte(result.Content[0].(*protocol.TextContent).Text), &value); err != nil {
 			t.Fatal(err)
 		}
 		if value["decision"] != tc.want || value["executed"] != false {
@@ -80,7 +80,7 @@ func TestSubagentCannotWidenOperatorPolicy(t *testing.T) {
 		}
 	}
 	result, err := s.CallTool(context.Background(), "list_subagents", nil)
-	if err != nil || result.IsError || !strings.Contains(result.Content[0].(protocol.TextContent).Text, "reviewer") {
+	if err != nil || result.IsError || !strings.Contains(result.Content[0].(*protocol.TextContent).Text, "reviewer") {
 		t.Fatalf("registry: %v %+v", err, result)
 	}
 }

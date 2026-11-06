@@ -74,15 +74,6 @@ jobs:
       gitleaks_sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       osv_scanner_version: 2.5.1
       osv_scanner_sha256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
-      # GO-2026-6911 is in mcp-go's client/transport (NewStreamableHTTP). The pinned
-      # v0.8.5 has no client/transport package at all, and Brain imports only the mcp
-      # and server packages for its stdio MCP server; the advisory's range starts at 0
-      # with no fixed version. Revisit on a fixed release, on moving to another MCP
-      # SDK, or on the expiry date, whichever comes first.
-      allow_json: |
-        [
-          {"scanner": "osv-scanner", "id": "GO-2026-6911", "reason": "mcp-go client/transport redirect SSRF; the package does not exist in the pinned v0.8.5 and Brain imports only mcp and server", "expires": "2027-02-06"}
-        ]
 
   # One stable check name to require, whatever the matrix above grows into.
   ci-ok:

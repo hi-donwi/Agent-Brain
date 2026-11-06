@@ -2,18 +2,22 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/hi-donwi/Agent-Brain/internal/agent"
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
 	"github.com/hi-donwi/Agent-Brain/internal/codeintel"
 	"github.com/hi-donwi/Agent-Brain/internal/rag"
 	"github.com/hi-donwi/Agent-Brain/internal/skills"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Config configures the read-only lokal MCP server.
@@ -30,17 +34,22 @@ type Config struct {
 	Aliases             map[string]string
 }
 
+// toolHandler is the body of one tool: the call's arguments as a JSON object in, a result
+// out. A failure the caller should see is a result with IsError set; a Go error is a
+// protocol error.
+type toolHandler func(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error)
+
 // Server exposes lokal's knowledge, skills, models, and code intelligence over MCP.
 type Server struct {
 	agentPolicy         agent.Policy
 	agentDefinitionDirs []string
-	mcpServer           *server.MCPServer
+	mcpServer           *sdk.Server
 	rootDir             string
 	searcher            *rag.Searcher
 	skillsMgr           *skills.Manager
 	adapter             backend.Adapter
 	aliases             map[string]string
-	handlers            map[string]server.ToolHandlerFunc
+	handlers            map[string]toolHandler
 }
 
 // NewServer registers read-only MCP tools and resources and builds an MCP server instance.
@@ -58,11 +67,14 @@ func NewServer(cfg Config) *Server {
 		root, _ = os.Getwd()
 	}
 
-	mcpSrv := server.NewMCPServer(
-		name,
-		ver,
-		server.WithResourceCapabilities(false, false),
-	)
+	// The tool and resource lists are fixed at startup, so no list-changed notifications,
+	// and the server sends no log messages: neither capability is advertised.
+	mcpSrv := sdk.NewServer(&sdk.Implementation{Name: name, Version: ver}, &sdk.ServerOptions{
+		Capabilities: &sdk.ServerCapabilities{
+			Tools:     &sdk.ToolCapabilities{},
+			Resources: &sdk.ResourceCapabilities{},
+		},
+	})
 
 	s := &Server{
 		mcpServer: mcpSrv,
@@ -71,7 +83,7 @@ func NewServer(cfg Config) *Server {
 		skillsMgr: cfg.SkillsMgr,
 		adapter:   cfg.Adapter,
 		aliases:   cfg.Aliases,
-		handlers:  make(map[string]server.ToolHandlerFunc),
+		handlers:  make(map[string]toolHandler),
 	}
 
 	s.agentPolicy = agent.Policy{Root: s.rootDir}
@@ -88,97 +100,168 @@ func NewServer(cfg Config) *Server {
 }
 
 // CallTool allows programmatic, in-process invocation of registered tools.
-func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*mcp.CallToolResult, error) {
+func (s *Server) CallTool(ctx context.Context, name string, args map[string]interface{}) (*sdk.CallToolResult, error) {
 	handler, ok := s.handlers[name]
 	if !ok {
 		return nil, fmt.Errorf("tool %q not found", name)
 	}
-	req := mcp.CallToolRequest{}
-	req.Params.Name = name
-	req.Params.Arguments = args
-	return handler(ctx, req)
+	return handler(ctx, args)
 }
 
 // MCPServer returns the underlying MCP server handle.
-func (s *Server) MCPServer() *server.MCPServer {
+func (s *Server) MCPServer() *sdk.Server {
 	return s.mcpServer
 }
 
-// ServeStdio starts the stdio transport loop. It blocks until stdin closes or SIGINT/SIGTERM.
+// ServeStdio serves MCP over stdin and stdout. It blocks until the client closes stdin or
+// the process receives SIGINT or SIGTERM.
 func (s *Server) ServeStdio() error {
-	return server.ServeStdio(s.mcpServer)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return s.serve(ctx, &sdk.StdioTransport{})
+}
+
+// serve runs one session over transport until the client disconnects or ctx ends. The
+// context ending is how a signal stops the server, which is a normal shutdown, not a
+// failure.
+func (s *Server) serve(ctx context.Context, transport sdk.Transport) error {
+	err := s.mcpServer.Run(ctx, transport)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+// addTool registers a tool for MCP clients and for CallTool. The SDK hands a low-level
+// handler raw arguments without validating them; each handler checks its own.
+func (s *Server) addTool(tool *sdk.Tool, handler toolHandler) {
+	s.mcpServer.AddTool(tool, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		args, err := decodeArguments(req.Params.Arguments)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		return handler(ctx, args)
+	})
+	s.handlers[tool.Name] = handler
+}
+
+// decodeArguments reads tools/call arguments, which MCP defines as a JSON object. Absent
+// arguments are an empty object; JSON numbers decode as float64.
+func decodeArguments(raw json.RawMessage) (map[string]interface{}, error) {
+	args := map[string]interface{}{}
+	if len(raw) == 0 {
+		return args, nil
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("tool arguments must be a JSON object")
+	}
+	if decoded == nil {
+		return args, nil
+	}
+	return decoded, nil
+}
+
+func textResult(text string) *sdk.CallToolResult {
+	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}
+}
+
+func errorResult(text string) *sdk.CallToolResult {
+	result := textResult(text)
+	result.IsError = true
+	return result
+}
+
+// inputSchema is a tool's input: an object with the given properties, the required ones named.
+func inputSchema(properties map[string]*jsonschema.Schema, required ...string) *jsonschema.Schema {
+	return &jsonschema.Schema{Type: "object", Properties: properties, Required: required}
+}
+
+func stringParam(description string) *jsonschema.Schema {
+	return &jsonschema.Schema{Type: "string", Description: description}
+}
+
+func numberParam(description string) *jsonschema.Schema {
+	return &jsonschema.Schema{Type: "number", Description: description}
 }
 
 func (s *Server) registerTools() {
-	// Tool 1: search_knowledge
-	searchTool := mcp.NewTool("search_knowledge",
-		mcp.WithDescription("Search indexed documentation and code knowledge with hybrid keyword and semantic retrieval, returning citations and snippets. (Read-only)"),
-		mcp.WithString("query", mcp.Required(), mcp.Description("Search query or natural language question")),
-		mcp.WithString("collection", mcp.Description("Collection name to search in (default: default)")),
-		mcp.WithNumber("limit", mcp.Description("Maximum number of citations to return (default: 5)")),
-	)
-	s.mcpServer.AddTool(searchTool, s.handleSearchKnowledge)
-	s.handlers["search_knowledge"] = s.handleSearchKnowledge
+	s.addTool(&sdk.Tool{
+		Name:        "search_knowledge",
+		Description: "Search indexed documentation and code knowledge with hybrid keyword and semantic retrieval, returning citations and snippets. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"query":      stringParam("Search query or natural language question"),
+			"collection": stringParam("Collection name to search in (default: default)"),
+			"limit":      numberParam("Maximum number of citations to return (default: 5)"),
+		}, "query"),
+	}, s.handleSearchKnowledge)
 
-	// Tool 2: list_skills
-	listSkillsTool := mcp.NewTool("list_skills",
-		mcp.WithDescription("List all available Agent Skills across project, user, and configured sources. (Read-only)"),
-	)
-	s.mcpServer.AddTool(listSkillsTool, s.handleListSkills)
-	s.handlers["list_skills"] = s.handleListSkills
+	s.addTool(&sdk.Tool{
+		Name:        "list_skills",
+		Description: "List all available Agent Skills across project, user, and configured sources. (Read-only)",
+		InputSchema: inputSchema(nil),
+	}, s.handleListSkills)
 
-	// Tool 3: get_skill
-	getSkillTool := mcp.NewTool("get_skill",
-		mcp.WithDescription("Fetch the markdown instructions for a skill, or inspect a specific reference file. (Read-only)"),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Name of the skill to fetch")),
-		mcp.WithString("reference", mcp.Description("Optional relative path to a reference file under references/ (Progressive Disclosure Step 3)")),
-	)
-	s.mcpServer.AddTool(getSkillTool, s.handleGetSkill)
-	s.handlers["get_skill"] = s.handleGetSkill
+	s.addTool(&sdk.Tool{
+		Name:        "get_skill",
+		Description: "Fetch the markdown instructions for a skill, or inspect a specific reference file. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"name":      stringParam("Name of the skill to fetch"),
+			"reference": stringParam("Optional relative path to a reference file under references/ (Progressive Disclosure Step 3)"),
+		}, "name"),
+	}, s.handleGetSkill)
 
-	// Tool 4: list_models
-	listModelsTool := mcp.NewTool("list_models",
-		mcp.WithDescription("List available local AI models and configured role aliases. (Read-only)"),
-	)
-	s.mcpServer.AddTool(listModelsTool, s.handleListModels)
-	s.handlers["list_models"] = s.handleListModels
+	s.addTool(&sdk.Tool{
+		Name:        "list_models",
+		Description: "List available local AI models and configured role aliases. (Read-only)",
+		InputSchema: inputSchema(nil),
+	}, s.handleListModels)
 
-	// Tool 5: repo_map
-	repoMapTool := mcp.NewTool("repo_map",
-		mcp.WithDescription("Generate a ranked outline of repository files and symbol definitions within a token budget. (Read-only)"),
-		mcp.WithNumber("tokens", mcp.Description("Maximum token budget for the repository outline (default: 2048)")),
-		mcp.WithString("path", mcp.Description("Optional path to repository directory (default: current project)")),
-	)
-	s.mcpServer.AddTool(repoMapTool, s.handleRepoMap)
-	s.handlers["repo_map"] = s.handleRepoMap
+	s.addTool(&sdk.Tool{
+		Name:        "repo_map",
+		Description: "Generate a ranked outline of repository files and symbol definitions within a token budget. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"tokens": numberParam("Maximum token budget for the repository outline (default: 2048)"),
+			"path":   stringParam("Optional path to repository directory (default: current project)"),
+		}),
+	}, s.handleRepoMap)
 
-	// Tool 6: find_symbol
-	findSymbolTool := mcp.NewTool("find_symbol",
-		mcp.WithDescription("Locate definitions and references of a code symbol across the repository. (Read-only)"),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Symbol name to locate")),
-		mcp.WithNumber("limit", mcp.Description("Maximum references to return (default: 20)")),
-		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
-	)
-	s.mcpServer.AddTool(findSymbolTool, s.handleFindSymbol)
-	s.handlers["find_symbol"] = s.handleFindSymbol
+	s.addTool(&sdk.Tool{
+		Name:        "find_symbol",
+		Description: "Locate definitions and references of a code symbol across the repository. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"name":  stringParam("Symbol name to locate"),
+			"limit": numberParam("Maximum references to return (default: 20)"),
+			"path":  stringParam("Optional path to repository directory"),
+		}, "name"),
+	}, s.handleFindSymbol)
 
-	// Tool 7: search_code
-	searchCodeTool := mcp.NewTool("search_code",
-		mcp.WithDescription("Perform regex or text search across repository source code. (Read-only)"),
-		mcp.WithString("pattern", mcp.Required(), mcp.Description("Regular expression or text search pattern")),
-		mcp.WithNumber("limit", mcp.Description("Maximum matches to return (default: 30)")),
-		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
-	)
-	s.mcpServer.AddTool(searchCodeTool, s.handleSearchCode)
-	s.handlers["search_code"] = s.handleSearchCode
+	s.addTool(&sdk.Tool{
+		Name:        "search_code",
+		Description: "Perform regex or text search across repository source code. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"pattern": stringParam("Regular expression or text search pattern"),
+			"limit":   numberParam("Maximum matches to return (default: 30)"),
+			"path":    stringParam("Optional path to repository directory"),
+		}, "pattern"),
+	}, s.handleSearchCode)
 
-	// Tool 8: project_commands
-	projectCmdsTool := mcp.NewTool("project_commands",
-		mcp.WithDescription("Detect project build, test, lint, and run commands as structured data. (Read-only)"),
-		mcp.WithString("path", mcp.Description("Optional path to repository directory")),
-	)
-	s.mcpServer.AddTool(projectCmdsTool, s.handleProjectCommands)
-	s.handlers["project_commands"] = s.handleProjectCommands
+	s.addTool(&sdk.Tool{
+		Name:        "project_commands",
+		Description: "Detect project build, test, lint, and run commands as structured data. (Read-only)",
+		InputSchema: inputSchema(map[string]*jsonschema.Schema{
+			"path": stringParam("Optional path to repository directory"),
+		}),
+	}, s.handleProjectCommands)
+}
+
+// fileURI is the file:// URI of an absolute path, escaped so any path is a valid URI.
+func fileURI(path string) string {
+	slashed := filepath.ToSlash(path)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed // a Windows drive path: file:///C:/...
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }
 
 func (s *Server) registerResources() {
@@ -192,51 +275,44 @@ func (s *Server) registerResources() {
 	}
 
 	for _, inst := range meta.Instructions {
-		uri := "file:///" + filepath.ToSlash(inst.Path)
-		res := mcp.NewResource(
-			uri,
-			inst.Name,
-			mcp.WithResourceDescription("Project instruction contract: "+inst.Name),
-			mcp.WithMIMEType("text/markdown"),
-		)
+		uri := fileURI(inst.Path)
 		content := inst.Content
-		s.mcpServer.AddResource(res, func(ctx context.Context, req mcp.ReadResourceRequest) ([]interface{}, error) {
-			return []interface{}{
-				mcp.TextResourceContents{
-					ResourceContents: mcp.ResourceContents{
-						URI:      uri,
-						MIMEType: "text/markdown",
-					},
-					Text: content,
-				},
+		s.mcpServer.AddResource(&sdk.Resource{
+			URI:         uri,
+			Name:        inst.Name,
+			Description: "Project instruction contract: " + inst.Name,
+			MIMEType:    "text/markdown",
+		}, func(ctx context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
+			return &sdk.ReadResourceResult{
+				Contents: []*sdk.ResourceContents{{URI: uri, MIMEType: "text/markdown", Text: content}},
 			}, nil
 		})
 	}
 }
 
-func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleSearchKnowledge(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
 	if s.searcher == nil {
-		return mcp.NewToolResultError("searcher is not configured in lokal server"), nil
+		return errorResult("searcher is not configured in lokal server"), nil
 	}
 
-	queryVal, ok := request.Params.Arguments["query"]
+	queryVal, ok := args["query"]
 	if !ok {
-		return mcp.NewToolResultError("missing required parameter 'query'"), nil
+		return errorResult("missing required parameter 'query'"), nil
 	}
 	query, ok := queryVal.(string)
 	if !ok || strings.TrimSpace(query) == "" {
-		return mcp.NewToolResultError("parameter 'query' must be a non-empty string"), nil
+		return errorResult("parameter 'query' must be a non-empty string"), nil
 	}
 
 	collection := "default"
-	if colVal, ok := request.Params.Arguments["collection"]; ok {
+	if colVal, ok := args["collection"]; ok {
 		if colStr, ok := colVal.(string); ok && strings.TrimSpace(colStr) != "" {
 			collection = strings.TrimSpace(colStr)
 		}
 	}
 
 	limit := 5
-	if limVal, ok := request.Params.Arguments["limit"]; ok {
+	if limVal, ok := args["limit"]; ok {
 		switch v := limVal.(type) {
 		case float64:
 			if int(v) > 0 {
@@ -251,11 +327,11 @@ func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallTool
 
 	results, err := s.searcher.Search(ctx, collection, query, limit)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
+		return errorResult(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
 	if len(results) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("No relevant documents found in collection %q.", collection)), nil
+		return textResult(fmt.Sprintf("No relevant documents found in collection %q.", collection)), nil
 	}
 
 	var sb strings.Builder
@@ -267,21 +343,21 @@ func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallTool
 		sb.WriteString("\n```\n\n")
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleListSkills(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleListSkills(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
 	if s.skillsMgr == nil {
-		return mcp.NewToolResultError("skills manager is not configured in lokal server"), nil
+		return errorResult("skills manager is not configured in lokal server"), nil
 	}
 
 	list, err := s.skillsMgr.List()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("list skills failed: %v", err)), nil
+		return errorResult(fmt.Sprintf("list skills failed: %v", err)), nil
 	}
 
 	if len(list) == 0 {
-		return mcp.NewToolResultText("No skills found. Add skills to .agents/skills/ or ~/.lokal/skills/."), nil
+		return textResult("No skills found. Add skills to .agents/skills/ or ~/.lokal/skills/."), nil
 	}
 
 	var sb strings.Builder
@@ -294,24 +370,24 @@ func (s *Server) handleListSkills(ctx context.Context, request mcp.CallToolReque
 		sb.WriteString(fmt.Sprintf("- **%s** [%s]%s: %s\n", sk.Name, sk.Source, pack, sk.Description))
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleGetSkill(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetSkill(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
 	if s.skillsMgr == nil {
-		return mcp.NewToolResultError("skills manager is not configured in lokal server"), nil
+		return errorResult("skills manager is not configured in lokal server"), nil
 	}
 
-	nameVal, ok := request.Params.Arguments["name"]
+	nameVal, ok := args["name"]
 	if !ok {
-		return mcp.NewToolResultError("missing required parameter 'name'"), nil
+		return errorResult("missing required parameter 'name'"), nil
 	}
 	name, ok := nameVal.(string)
 	if !ok || strings.TrimSpace(name) == "" {
-		return mcp.NewToolResultError("parameter 'name' must be a non-empty string"), nil
+		return errorResult("parameter 'name' must be a non-empty string"), nil
 	}
 
-	refVal, ok := request.Params.Arguments["reference"]
+	refVal, ok := args["reference"]
 	var refRelPath string
 	if ok {
 		if rStr, ok := refVal.(string); ok {
@@ -323,18 +399,18 @@ func (s *Server) handleGetSkill(ctx context.Context, request mcp.CallToolRequest
 	if refRelPath != "" {
 		content, err := s.skillsMgr.GetReference(name, refRelPath)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("get reference %q in skill %q failed: %v", refRelPath, name, err)), nil
+			return errorResult(fmt.Sprintf("get reference %q in skill %q failed: %v", refRelPath, name, err)), nil
 		}
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("# Reference: %s/references/%s\n\n", name, refRelPath))
 		sb.WriteString(content)
-		return mcp.NewToolResultText(sb.String()), nil
+		return textResult(sb.String()), nil
 	}
 
 	// Step 2: Full skill requested
 	sk, err := s.skillsMgr.GetSkill(name)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("skill %q not found: %v", name, err)), nil
+		return errorResult(fmt.Sprintf("skill %q not found: %v", name, err)), nil
 	}
 
 	var sb strings.Builder
@@ -348,10 +424,10 @@ func (s *Server) handleGetSkill(ctx context.Context, request mcp.CallToolRequest
 	sb.WriteString(sk.Body)
 	sb.WriteString("\n")
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleListModels(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleListModels(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
 	var sb strings.Builder
 
 	if len(s.aliases) > 0 {
@@ -375,14 +451,14 @@ func (s *Server) handleListModels(ctx context.Context, request mcp.CallToolReque
 		}
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleRepoMap(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	targetDir := s.resolvePath(request.Params.Arguments["path"])
+func (s *Server) handleRepoMap(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
+	targetDir := s.resolvePath(args["path"])
 
 	tokens := 2048
-	if tVal, ok := request.Params.Arguments["tokens"]; ok {
+	if tVal, ok := args["tokens"]; ok {
 		switch v := tVal.(type) {
 		case float64:
 			if int(v) > 0 {
@@ -397,26 +473,26 @@ func (s *Server) handleRepoMap(ctx context.Context, request mcp.CallToolRequest)
 
 	rm, err := codeintel.BuildRepoMap(targetDir, tokens)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("build repository map failed: %v", err)), nil
+		return errorResult(fmt.Sprintf("build repository map failed: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(rm.Formatted), nil
+	return textResult(rm.Formatted), nil
 }
 
-func (s *Server) handleFindSymbol(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	targetDir := s.resolvePath(request.Params.Arguments["path"])
+func (s *Server) handleFindSymbol(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
+	targetDir := s.resolvePath(args["path"])
 
-	nameVal, ok := request.Params.Arguments["name"]
+	nameVal, ok := args["name"]
 	if !ok {
-		return mcp.NewToolResultError("missing required parameter 'name'"), nil
+		return errorResult("missing required parameter 'name'"), nil
 	}
 	name, ok := nameVal.(string)
 	if !ok || strings.TrimSpace(name) == "" {
-		return mcp.NewToolResultError("parameter 'name' must be a non-empty string"), nil
+		return errorResult("parameter 'name' must be a non-empty string"), nil
 	}
 
 	limit := 20
-	if limVal, ok := request.Params.Arguments["limit"]; ok {
+	if limVal, ok := args["limit"]; ok {
 		switch v := limVal.(type) {
 		case float64:
 			if int(v) > 0 {
@@ -431,11 +507,11 @@ func (s *Server) handleFindSymbol(ctx context.Context, request mcp.CallToolReque
 
 	res, err := codeintel.FindSymbol(targetDir, strings.TrimSpace(name), limit)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("find symbol %q failed: %v", name, err)), nil
+		return errorResult(fmt.Sprintf("find symbol %q failed: %v", name, err)), nil
 	}
 
 	if len(res.Definitions) == 0 && len(res.References) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("No definitions or references found for symbol %q.", name)), nil
+		return textResult(fmt.Sprintf("No definitions or references found for symbol %q.", name)), nil
 	}
 
 	var sb strings.Builder
@@ -459,23 +535,23 @@ func (s *Server) handleFindSymbol(ctx context.Context, request mcp.CallToolReque
 		}
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleSearchCode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	targetDir := s.resolvePath(request.Params.Arguments["path"])
+func (s *Server) handleSearchCode(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
+	targetDir := s.resolvePath(args["path"])
 
-	patVal, ok := request.Params.Arguments["pattern"]
+	patVal, ok := args["pattern"]
 	if !ok {
-		return mcp.NewToolResultError("missing required parameter 'pattern'"), nil
+		return errorResult("missing required parameter 'pattern'"), nil
 	}
 	pattern, ok := patVal.(string)
 	if !ok || strings.TrimSpace(pattern) == "" {
-		return mcp.NewToolResultError("parameter 'pattern' must be a non-empty string"), nil
+		return errorResult("parameter 'pattern' must be a non-empty string"), nil
 	}
 
 	limit := 30
-	if limVal, ok := request.Params.Arguments["limit"]; ok {
+	if limVal, ok := args["limit"]; ok {
 		switch v := limVal.(type) {
 		case float64:
 			if int(v) > 0 {
@@ -490,11 +566,11 @@ func (s *Server) handleSearchCode(ctx context.Context, request mcp.CallToolReque
 
 	matches, err := codeintel.SearchCode(targetDir, pattern, limit)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search code failed: %v", err)), nil
+		return errorResult(fmt.Sprintf("search code failed: %v", err)), nil
 	}
 
 	if len(matches) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf("No code matches found for pattern %q.", pattern)), nil
+		return textResult(fmt.Sprintf("No code matches found for pattern %q.", pattern)), nil
 	}
 
 	var sb strings.Builder
@@ -503,15 +579,15 @@ func (s *Server) handleSearchCode(ctx context.Context, request mcp.CallToolReque
 		sb.WriteString(fmt.Sprintf("- [File: %s:%d]: `%s`\n", m.Path, m.Line, m.Snippet))
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
-func (s *Server) handleProjectCommands(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	targetDir := s.resolvePath(request.Params.Arguments["path"])
+func (s *Server) handleProjectCommands(ctx context.Context, args map[string]interface{}) (*sdk.CallToolResult, error) {
+	targetDir := s.resolvePath(args["path"])
 
 	meta, err := codeintel.DetectProject(targetDir)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("detect project failed: %v", err)), nil
+		return errorResult(fmt.Sprintf("detect project failed: %v", err)), nil
 	}
 
 	var sb strings.Builder
@@ -543,7 +619,7 @@ func (s *Server) handleProjectCommands(ctx context.Context, request mcp.CallTool
 		sb.WriteString("No standard build or test configuration files detected.\n")
 	}
 
-	return mcp.NewToolResultText(sb.String()), nil
+	return textResult(sb.String()), nil
 }
 
 func (s *Server) resolvePath(pathArg interface{}) string {
