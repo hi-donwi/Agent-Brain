@@ -105,6 +105,70 @@ func TestAccountPool_RoundRobin(t *testing.T) {
 	}
 }
 
+func TestAccountPool_WeightedRoundRobin(t *testing.T) {
+	cfg := RouterConfig{
+		Strategy: "weighted",
+		Accounts: []Account{
+			{ID: "weighted-a", Provider: ProviderOpenAI, Enabled: true, Weight: 5},
+			{ID: "weighted-b", Provider: ProviderOpenAI, Enabled: true, Weight: 1},
+		},
+	}
+	pool := NewAccountPool(cfg)
+	counts := map[string]int{}
+	for range 12 {
+		account, err := pool.SelectAccount(ProviderOpenAI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[account.ID]++
+	}
+	if counts["weighted-a"] != 10 || counts["weighted-b"] != 2 {
+		t.Fatalf("expected a 5:1 distribution over 12 requests, got %#v", counts)
+	}
+}
+
+func TestAccountPool_WeightedRoundRobinUsesEligibleAccountsOnly(t *testing.T) {
+	pool := NewAccountPool(RouterConfig{
+		Strategy: "weighted",
+		Accounts: []Account{
+			{ID: "eligible", Provider: ProviderOpenAI, Enabled: true, Weight: 3},
+			{ID: "disabled", Provider: ProviderOpenAI, Enabled: false, Weight: 20},
+			{ID: "other-provider", Provider: ProviderAnthropic, Enabled: true, Weight: 20},
+		},
+	})
+
+	for range 6 {
+		account, err := pool.SelectAccount(ProviderOpenAI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if account.ID != "eligible" {
+			t.Fatalf("selected ineligible account %q", account.ID)
+		}
+	}
+}
+
+func TestAccountPool_WeightedRoundRobinDefaultsMissingWeightsToOne(t *testing.T) {
+	pool := NewAccountPool(RouterConfig{
+		Strategy: "weighted",
+		Accounts: []Account{
+			{ID: "default-a", Provider: ProviderAnthropic, Enabled: true},
+			{ID: "default-b", Provider: ProviderAnthropic, Enabled: true},
+		},
+	})
+	counts := map[string]int{}
+	for range 4 {
+		account, err := pool.SelectAccount(ProviderAnthropic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[account.ID]++
+	}
+	if counts["default-a"] != 2 || counts["default-b"] != 2 {
+		t.Fatalf("omitted weights must default to one, got %#v", counts)
+	}
+}
+
 func TestCompressToolResult(t *testing.T) {
 	var builder strings.Builder
 	builder.WriteString("\x1b[32mPASS\x1b[0m test/sample.go\n\n\n\n\n")

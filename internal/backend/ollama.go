@@ -238,28 +238,80 @@ func (o *OllamaAdapter) RunningModels(ctx context.Context) ([]ProcessInfo, error
 	return res, nil
 }
 
+func ollamaKeepAlive(value string) (any, bool) {
+	if value == "" {
+		return nil, false
+	}
+	if value == "-1" {
+		return -1, true
+	}
+	return value, true
+}
+
+func ollamaOptions(options *ChatOptions) map[string]interface{} {
+	opts := make(map[string]interface{})
+	if options.NumCtx > 0 {
+		opts["num_ctx"] = options.NumCtx
+	}
+	if options.TemperatureSet || options.Temperature > 0 {
+		opts["temperature"] = options.Temperature
+	}
+	if options.NumPredict > 0 {
+		opts["num_predict"] = options.NumPredict
+	}
+	if len(options.Stop) > 0 {
+		opts["stop"] = options.Stop
+	}
+	if options.TopP != nil {
+		opts["top_p"] = *options.TopP
+	}
+	if options.Seed != nil {
+		opts["seed"] = *options.Seed
+	}
+	return opts
+}
+
+func ollamaMessages(messages []ChatMessage) []ChatMessage {
+	result := append([]ChatMessage(nil), messages...)
+	names := make(map[string]string)
+	for i, message := range result {
+		for _, call := range message.ToolCalls {
+			if call.ID != "" {
+				names[call.ID] = call.Function.Name
+			}
+		}
+		if message.Role == "tool" && message.ToolCallID != "" {
+			result[i].ToolName = names[message.ToolCallID]
+		}
+	}
+	return result
+}
+
 // Chat performs a single completion using native /api/chat.
 func (o *OllamaAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	payload := map[string]interface{}{
 		"model":    req.Model,
-		"messages": req.Messages,
+		"messages": ollamaMessages(req.Messages),
 		"stream":   false,
+		"truncate": false,
+		"shift":    false,
 	}
 	if req.Options != nil {
-		opts := make(map[string]interface{})
-		if req.Options.NumCtx > 0 {
-			opts["num_ctx"] = req.Options.NumCtx
+		if opts := ollamaOptions(req.Options); len(opts) > 0 {
+			payload["options"] = opts
 		}
-		if req.Options.Temperature > 0 {
-			opts["temperature"] = req.Options.Temperature
-		}
-		payload["options"] = opts
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
+	}
+	if len(req.Format) > 0 {
+		payload["format"] = req.Format
 	}
 	if req.Think != nil {
 		payload["think"] = *req.Think
 	}
-	if req.KeepAlive != "" {
-		payload["keep_alive"] = req.KeepAlive
+	if keepAlive, ok := ollamaKeepAlive(req.KeepAlive); ok {
+		payload["keep_alive"] = keepAlive
 	}
 
 	body, err := json.Marshal(payload)
@@ -288,6 +340,8 @@ func (o *OllamaAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 		Model      string      `json:"model"`
 		Message    ChatMessage `json:"message"`
 		Done       bool        `json:"done"`
+		DoneReason string      `json:"done_reason"`
+		Error      string      `json:"error"`
 		TotalDur   int64       `json:"total_duration"`
 		LoadDur    int64       `json:"load_duration"`
 		PromptEval int         `json:"prompt_eval_count"`
@@ -298,6 +352,9 @@ func (o *OllamaAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode chat response: %w", err)
 	}
+	if raw.Error != "" {
+		return nil, fmt.Errorf("ollama chat: %s", raw.Error)
+	}
 
 	evalDuration := time.Duration(raw.EvalDur)
 	var tokPerSec float64
@@ -307,6 +364,7 @@ func (o *OllamaAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 
 	return &ChatResponse{
 		Model:              raw.Model,
+		DoneReason:         raw.DoneReason,
 		Message:            raw.Message,
 		TotalDuration:      time.Duration(raw.TotalDur),
 		LoadDuration:       time.Duration(raw.LoadDur),
@@ -326,27 +384,28 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 
 	payload := map[string]interface{}{
 		"model":    req.Model,
-		"messages": req.Messages,
+		"messages": ollamaMessages(req.Messages),
 		"stream":   true,
+		"truncate": false,
+		"shift":    false,
 	}
 
-	options := make(map[string]interface{})
 	if req.Options != nil {
-		if req.Options.NumCtx > 0 {
-			options["num_ctx"] = req.Options.NumCtx
-		}
-		if req.Options.Temperature > 0 {
-			options["temperature"] = req.Options.Temperature
+		if options := ollamaOptions(req.Options); len(options) > 0 {
+			payload["options"] = options
 		}
 	}
-	if len(options) > 0 {
-		payload["options"] = options
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
+	}
+	if len(req.Format) > 0 {
+		payload["format"] = req.Format
 	}
 	if req.Think != nil {
 		payload["think"] = *req.Think
 	}
-	if req.KeepAlive != "" {
-		payload["keep_alive"] = req.KeepAlive
+	if keepAlive, ok := ollamaKeepAlive(req.KeepAlive); ok {
+		payload["keep_alive"] = keepAlive
 	}
 
 	body, err := json.Marshal(payload)
@@ -376,8 +435,12 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 	var finalModel string
 	var totalDur, loadDur, promptDur, evalDur int64
 	var promptEval, evalCount int
+	var calls []ToolCall
+	var done bool
+	var doneReason string
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
@@ -388,6 +451,8 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 			Model      string      `json:"model"`
 			Message    ChatMessage `json:"message"`
 			Done       bool        `json:"done"`
+			DoneReason string      `json:"done_reason"`
+			Error      string      `json:"error"`
 			TotalDur   int64       `json:"total_duration"`
 			LoadDur    int64       `json:"load_duration"`
 			PromptEval int         `json:"prompt_eval_count"`
@@ -396,7 +461,10 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 			EvalDur    int64       `json:"eval_duration"`
 		}
 		if err := json.Unmarshal(line, &raw); err != nil {
-			continue
+			return nil, fmt.Errorf("decode ollama chat stream: %w", err)
+		}
+		if raw.Error != "" {
+			return nil, fmt.Errorf("ollama chat stream: %s", raw.Error)
 		}
 
 		finalModel = raw.Model
@@ -404,12 +472,15 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 			lastRole = raw.Message.Role
 		}
 		accumulatedContent.WriteString(raw.Message.Content)
+		calls = append(calls, raw.Message.ToolCalls...)
 
 		if onChunk != nil {
 			chunk := ChatChunk{
 				Role:            raw.Message.Role,
 				Content:         raw.Message.Content,
 				Reasoning:       raw.Message.Reasoning,
+				ToolCalls:       raw.Message.ToolCalls,
+				DoneReason:      raw.DoneReason,
 				Done:            raw.Done,
 				PromptEvalCount: raw.PromptEval,
 				EvalCount:       raw.EvalCount,
@@ -420,6 +491,8 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 		}
 
 		if raw.Done {
+			done = true
+			doneReason = raw.DoneReason
 			totalDur = raw.TotalDur
 			loadDur = raw.LoadDur
 			promptDur = raw.PromptDur
@@ -433,6 +506,9 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read chat stream from ollama: %w", err)
 	}
+	if !done {
+		return nil, fmt.Errorf("ollama chat stream: %w", io.ErrUnexpectedEOF)
+	}
 
 	evalDuration := time.Duration(evalDur)
 	var tokPerSec float64
@@ -441,10 +517,12 @@ func (o *OllamaAdapter) ChatStream(ctx context.Context, req ChatRequest, onChunk
 	}
 
 	return &ChatResponse{
-		Model: finalModel,
+		Model:      finalModel,
+		DoneReason: doneReason,
 		Message: ChatMessage{
-			Role:    lastRole,
-			Content: accumulatedContent.String(),
+			Role:      lastRole,
+			Content:   accumulatedContent.String(),
+			ToolCalls: calls,
 		},
 		TotalDuration:      time.Duration(totalDur),
 		LoadDuration:       time.Duration(loadDur),

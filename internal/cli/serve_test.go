@@ -77,3 +77,22 @@ func TestServeCmd_StartsAndShutsDown(t *testing.T) {
 		t.Errorf("expected mode 0600 on %s, got %o", tokenFile, info.Mode().Perm())
 	}
 }
+
+func TestServeCmdRejectsInvalidInferenceConfig(t *testing.T) {
+	tempHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempHome, "config.yaml"), []byte("version: 1\nprofile: standard\ninference:\n  context_length: -1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newServeCmd(ServeDeps{
+		ResolveHome:    func() (home.Layout, error) { return home.Resolve(func(string) string { return tempHome }, nil) },
+		ResolveAdapter: func() (backend.Adapter, error) { return &mockCLIAdapter{}, nil },
+		Catalog:        catalog.Default(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd.SetOut(&bytes.Buffer{})
+	err := cmd.ExecuteContext(ctx)
+	if err == nil || !strings.Contains(err.Error(), "inference limits") {
+		t.Fatalf("invalid limits silently replaced with defaults: %v", err)
+	}
+}

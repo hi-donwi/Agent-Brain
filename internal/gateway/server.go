@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -65,9 +66,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				budget = 4 * gib
 			}
 		}
+		maxConcurrency := 1
+		if cfg.UserConfig != nil && cfg.UserConfig.Inference.MaxConcurrency > 0 {
+			maxConcurrency = cfg.UserConfig.Inference.MaxConcurrency
+		}
 		cfg.Residency = residency.New(residency.Config{
 			TotalBudget:    budget,
-			MaxConcurrency: 4,
+			MaxConcurrency: maxConcurrency,
 			QueueTimeout:   60 * time.Second,
 			Catalog:        cfg.Catalog,
 			Adapter:        cfg.Adapter,
@@ -264,16 +269,232 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // Chat completions request and response representations.
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string             `json:"role"`
+	Content    string             `json:"content"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	ToolCalls  []backend.ToolCall `json:"tool_calls,omitempty"`
+}
+
+func (m *chatMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role       string             `json:"role"`
+		Content    json.RawMessage    `json:"content"`
+		ToolCallID string             `json:"tool_call_id"`
+		ToolCalls  []backend.ToolCall `json:"tool_calls"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	content, err := flattenMessageContent(raw.Content)
+	if err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	if m.Role == "developer" {
+		m.Role = "system"
+	}
+	m.Content = content
+	m.ToolCallID = raw.ToolCallID
+	m.ToolCalls = raw.ToolCalls
+	return nil
+}
+
+func (m chatMessage) MarshalJSON() ([]byte, error) {
+	out := map[string]any{
+		"role":    m.Role,
+		"content": m.Content,
+	}
+	if m.ToolCallID != "" {
+		out["tool_call_id"] = m.ToolCallID
+	}
+	if len(m.ToolCalls) > 0 {
+		calls := make([]map[string]any, len(m.ToolCalls))
+		for i, call := range m.ToolCalls {
+			id := call.ID
+			if id == "" {
+				id = fmt.Sprintf("call_%d", i+1)
+			}
+			kind := call.Type
+			if kind == "" {
+				kind = "function"
+			}
+			calls[i] = map[string]any{
+				"id":   id,
+				"type": kind,
+				"function": map[string]string{
+					"name":      call.Function.Name,
+					"arguments": toolArgumentsString(call.Function.Arguments),
+				},
+			}
+		}
+		out["tool_calls"] = calls
+	}
+	return json.Marshal(out)
+}
+
+func flattenMessageContent(raw json.RawMessage) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	var parts []json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return "", fmt.Errorf("message content must be a string or array of content parts")
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		piece, supported, err := flattenContentPart(part)
+		if err != nil {
+			return "", err
+		}
+		if !supported {
+			return "", fmt.Errorf("non-text content is not supported by the local chat adapter")
+		}
+		if piece == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(piece)
+	}
+	return b.String(), nil
+}
+
+func normalizeClientModel(model string) string {
+	model = strings.TrimSpace(model)
+	for _, prefix := range []string{"openai/", "ollama/"} {
+		if strings.HasPrefix(model, prefix) {
+			return strings.TrimPrefix(model, prefix)
+		}
+	}
+	return model
+}
+
+func objectArguments(raw json.RawMessage) json.RawMessage {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return []byte("{}")
+	}
+	if raw[0] == '{' || raw[0] == '[' {
+		return raw
+	}
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil && json.Valid([]byte(encoded)) {
+		return []byte(encoded)
+	}
+	return raw
+}
+
+func toolArgumentsString(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return "{}"
+	}
+	if raw[0] == '"' {
+		var encoded string
+		if json.Unmarshal(raw, &encoded) == nil {
+			return encoded
+		}
+	}
+	return string(raw)
+}
+
+func finishReason(calls []backend.ToolCall, reason string) string {
+	if reason == "length" {
+		return "length"
+	}
+	if len(calls) > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
+func streamToolCalls(calls []backend.ToolCall) []map[string]any {
+	out := make([]map[string]any, len(calls))
+	for i, call := range calls {
+		id := call.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%d", i+1)
+		}
+		out[i] = map[string]any{
+			"index": i,
+			"id":    id,
+			"type":  "function",
+			"function": map[string]string{
+				"name":      call.Function.Name,
+				"arguments": toolArgumentsString(call.Function.Arguments),
+			},
+		}
+	}
+	return out
+}
+
+func flattenContentPart(raw json.RawMessage) (string, bool, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true, nil
+	}
+	var part struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &part); err != nil {
+		return "", false, fmt.Errorf("invalid message content part")
+	}
+	switch part.Type {
+	case "", "text", "input_text", "output_text":
+		if part.Text != "" {
+			return part.Text, true, nil
+		}
+		return part.Content, true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+type stopList []string
+
+func (s *stopList) UnmarshalJSON(data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*s = []string{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
 }
 
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []chatMessage   `json:"messages"`
+	Temperature         *float64        `json:"temperature,omitempty"`
+	MaxTokens           *int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int            `json:"max_completion_tokens,omitempty"`
+	Stop                stopList        `json:"stop,omitempty"`
+	Tools               json.RawMessage `json:"tools,omitempty"`
+	ToolChoice          json.RawMessage `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool           `json:"parallel_tool_calls,omitempty"`
+	N                   *int            `json:"n,omitempty"`
+	Logprobs            bool            `json:"logprobs,omitempty"`
+	ResponseFormat      json.RawMessage `json:"response_format,omitempty"`
+	TopP                *float64        `json:"top_p,omitempty"`
+	Seed                *int            `json:"seed,omitempty"`
+	StreamOptions       struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
+	Stream bool `json:"stream,omitempty"`
 }
 
 type chatChoice struct {
@@ -299,8 +520,9 @@ type chatResponse struct {
 
 // Streaming chunk representations.
 type chatChunkDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	ToolCalls []map[string]any `json:"tool_calls,omitempty"`
 }
 
 type chatChunkChoice struct {
@@ -338,6 +560,10 @@ func estimateTokens(text string, msgs []chatMessage) int {
 	totalChars := len(text)
 	for _, m := range msgs {
 		totalChars += len(m.Content) + 12
+		if len(m.ToolCalls) > 0 {
+			encoded, _ := json.Marshal(m.ToolCalls)
+			totalChars += len(encoded)
+		}
 	}
 	if totalChars == 0 {
 		return 0
@@ -376,6 +602,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
 		return
 	}
+	req.Model = normalizeClientModel(req.Model)
 
 	if strings.TrimSpace(req.Model) == "" {
 		writeAPIError(w, http.StatusBadRequest, "model field is required", "invalid_request_error", "bad_request")
@@ -391,43 +618,68 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "no backend inference adapter configured", "api_error", "backend_unavailable")
 		return
 	}
+	format, err := validateLocalChat(&req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_or_invalid_parameter")
+		return
+	}
 
 	// Resolve requested model/role
 	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, s.cfg.Adapter.Name())
 
 	// Context guard
-	var numCtx int
-	if target.CatalogModel != nil && target.CatalogModel.MaxContext > 0 {
-		numCtx = target.CatalogModel.MaxContext
-		estimatedTokens := estimateTokens("", req.Messages)
-		if estimatedTokens > numCtx {
-			writeAPIError(w, http.StatusBadRequest,
-				fmt.Sprintf("context length exceeded: estimated prompt (%d tokens) exceeds model max_context (%d)", estimatedTokens, numCtx),
-				"invalid_request_error", "context_length_exceeded")
-			return
+	numCtx := localContextLimit(target, s.cfg.UserConfig)
+	maxOutput := 2048
+	if s.cfg.UserConfig != nil {
+		limits := s.cfg.UserConfig.Inference
+		if limits.MaxOutputTokens > 0 {
+			maxOutput = limits.MaxOutputTokens
 		}
 	}
-
-	// Convert messages
 	backendMsgs := make([]backend.ChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
+		calls := make([]backend.ToolCall, len(m.ToolCalls))
+		for j, call := range m.ToolCalls {
+			call.Function.Arguments = objectArguments(call.Function.Arguments)
+			calls[j] = call
+		}
 		backendMsgs[i] = backend.ChatMessage{
-			Role:    m.Role,
-			Content: m.Content,
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  calls,
+			ToolCallID: m.ToolCallID,
 		}
 	}
 
-	var chatOpts *backend.ChatOptions
-	if numCtx > 0 || req.Temperature != nil {
-		chatOpts = &backend.ChatOptions{
-			NumCtx: numCtx,
-		}
-		if req.Temperature != nil {
-			chatOpts.Temperature = *req.Temperature
-		}
+	predict := req.MaxTokens
+	if req.MaxCompletionTokens != nil {
+		predict = req.MaxCompletionTokens
+	}
+	output := maxOutput
+	if predict != nil {
+		output = *predict
+	}
+	estimated := estimateTokens(string(req.Tools), req.Messages)
+	if estimated+output > numCtx {
+		writeAPIError(w, http.StatusBadRequest,
+			fmt.Sprintf("estimated prompt including tools (%d) plus output reserve (%d) exceeds runtime context (%d)", estimated, output, numCtx),
+			"invalid_request_error", "context_length_exceeded")
+		return
+	}
+	if output > maxOutput {
+		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("requested output exceeds configured max_output_tokens (%d)", maxOutput), "invalid_request_error", "output_limit_exceeded")
+		return
+	}
+	chatOpts := &backend.ChatOptions{NumCtx: numCtx, Stop: req.Stop, NumPredict: output, TopP: req.TopP, Seed: req.Seed}
+	if req.Temperature != nil {
+		chatOpts.Temperature = *req.Temperature
+		chatOpts.TemperatureSet = true
 	}
 
-	candidateTags := append([]string{target.BackendTag}, target.Fallbacks...)
+	candidateTags := []string{target.BackendTag}
+	if len(req.Tools) == 0 {
+		candidateTags = append(candidateTags, target.Fallbacks...)
+	}
 	thinkFalse := false
 
 	// Acquire residency lease and concurrency slot
@@ -457,7 +709,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		defer release()
 	}
 
-	// Handle SSE streaming
 	if req.Stream {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -472,15 +723,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		var headersWritten bool
 		var isFirstChunk = true
 		var doneSent bool
+		var toolIndex int
+		var sawToolCalls bool
 
 		for _, tag := range candidateTags {
 			isFirstChunk = true
 			var streamAcc strings.Builder
 			_, streamErr = s.cfg.Adapter.ChatStream(ctx, backend.ChatRequest{
-				Model:    tag,
-				Messages: backendMsgs,
-				Options:  chatOpts,
-				Think:    &thinkFalse,
+				Model:     tag,
+				Messages:  backendMsgs,
+				Options:   chatOpts,
+				Think:     &thinkFalse,
+				Tools:     req.Tools,
+				Format:    format,
+				KeepAlive: "-1",
 			}, func(chunk backend.ChatChunk) error {
 				if !headersWritten {
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -490,6 +746,36 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusOK)
 					headersWritten = true
 				}
+				if chunk.Content != "" || len(chunk.ToolCalls) > 0 || isFirstChunk {
+					role := ""
+					if isFirstChunk {
+						role = "assistant"
+						isFirstChunk = false
+					}
+					delta := chatChunkDelta{Role: role, Content: chunk.Content}
+					for _, call := range chunk.ToolCalls {
+						if call.ID == "" {
+							call.ID = generateID("call")
+						}
+						item := streamToolCalls([]backend.ToolCall{call})[0]
+						item["index"] = toolIndex
+						toolIndex++
+						delta.ToolCalls = append(delta.ToolCalls, item)
+						sawToolCalls = true
+					}
+					data, err := json.Marshal(chatStreamChunk{
+						ID: streamID, Object: "chat.completion.chunk", Created: created, Model: tag,
+						Choices: []chatChunkChoice{{Index: 0, Delta: delta}},
+					})
+					if err != nil {
+						return err
+					}
+					if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+						return err
+					}
+					flusher.Flush()
+				}
+				streamAcc.WriteString(chunk.Content)
 
 				if chunk.Done {
 					doneSent = true
@@ -511,14 +797,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 							EvalTokens:   chunk.EvalCount,
 						})
 					}
-					stopReason := "stop"
+					stopReason := finishReason(nil, chunk.DoneReason)
+					if sawToolCalls && stopReason != "length" {
+						stopReason = "tool_calls"
+					}
 					finalChoice := chatChunkChoice{
 						Index:        0,
 						Delta:        chatChunkDelta{},
 						FinishReason: &stopReason,
 					}
 					var usage *completionUsage
-					if chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {
+					if req.StreamOptions.IncludeUsage {
 						usage = &completionUsage{
 							PromptTokens:     chunk.PromptEvalCount,
 							CompletionTokens: chunk.EvalCount,
@@ -531,48 +820,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 						Created: created,
 						Model:   tag,
 						Choices: []chatChunkChoice{finalChoice},
-						Usage:   usage,
 					}
 					data, err := json.Marshal(finalPayload)
 					if err == nil {
 						_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 					}
+					if usage != nil {
+						usageData, _ := json.Marshal(chatStreamChunk{ID: streamID, Object: "chat.completion.chunk", Created: created, Model: tag, Choices: []chatChunkChoice{}, Usage: usage})
+						_, _ = fmt.Fprintf(w, "data: %s\n\n", usageData)
+					}
 					_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 					flusher.Flush()
 					return nil
 				}
-				streamAcc.WriteString(chunk.Content)
-
-				role := ""
-				if isFirstChunk {
-					role = "assistant"
-					isFirstChunk = false
-				}
-				delta := chatChunkDelta{
-					Role:    role,
-					Content: chunk.Content,
-				}
-				streamPayload := chatStreamChunk{
-					ID:      streamID,
-					Object:  "chat.completion.chunk",
-					Created: created,
-					Model:   tag,
-					Choices: []chatChunkChoice{
-						{
-							Index:        0,
-							Delta:        delta,
-							FinishReason: nil,
-						},
-					},
-				}
-				data, err := json.Marshal(streamPayload)
-				if err != nil {
-					return err
-				}
-				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
-					return err
-				}
-				flusher.Flush()
 				return nil
 			})
 
@@ -606,6 +866,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if headersWritten && !doneSent {
+			data, _ := json.Marshal(map[string]any{"error": map[string]string{"message": "backend stream interrupted", "type": "api_error", "code": "inference_error"}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 		}
@@ -619,10 +881,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	for _, tag := range candidateTags {
 		resp, lastErr = s.cfg.Adapter.Chat(ctx, backend.ChatRequest{
-			Model:    tag,
-			Messages: backendMsgs,
-			Options:  chatOpts,
-			Think:    &thinkFalse,
+			Model:     tag,
+			Messages:  backendMsgs,
+			Options:   chatOpts,
+			Think:     &thinkFalse,
+			Tools:     req.Tools,
+			Format:    format,
+			KeepAlive: "-1",
 		})
 		if lastErr == nil {
 			chosenTag = tag
@@ -673,6 +938,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	for i := range resp.Message.ToolCalls {
+		if resp.Message.ToolCalls[i].ID == "" {
+			resp.Message.ToolCalls[i].ID = generateID("call")
+		}
+	}
+
 	apiResp := chatResponse{
 		ID:      generateID("chatcmpl"),
 		Object:  "chat.completion",
@@ -682,10 +953,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			{
 				Index: 0,
 				Message: chatMessage{
-					Role:    resp.Message.Role,
-					Content: resp.Message.Content,
+					Role:      resp.Message.Role,
+					Content:   resp.Message.Content,
+					ToolCalls: resp.Message.ToolCalls,
 				},
-				FinishReason: "stop",
+				FinishReason: finishReason(resp.Message.ToolCalls, resp.DoneReason),
 			},
 		},
 		Usage: completionUsage{
@@ -723,10 +995,7 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, backendName)
 
 	tokens := estimateTokens(req.Text, req.Messages)
-	maxCtx := 0
-	if target.CatalogModel != nil && target.CatalogModel.MaxContext > 0 {
-		maxCtx = target.CatalogModel.MaxContext
-	}
+	maxCtx := localContextLimit(target, s.cfg.UserConfig)
 
 	fits := true
 	if maxCtx > 0 && tokens > maxCtx {

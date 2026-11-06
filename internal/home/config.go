@@ -27,6 +27,14 @@ type Config struct {
 	Backends     map[string]BackendConfig `yaml:"backends"`
 	Aliases      map[string]string        `yaml:"aliases"`
 	SkillSources []string                 `yaml:"skill_sources,omitempty"`
+	Inference    InferenceConfig          `yaml:"inference,omitempty"`
+}
+
+// InferenceConfig bounds the local runtime independently of a model's advertised capacity.
+type InferenceConfig struct {
+	ContextLength   int `yaml:"context_length,omitempty"`
+	MaxOutputTokens int `yaml:"max_output_tokens,omitempty"`
+	MaxConcurrency  int `yaml:"max_concurrency,omitempty"`
 }
 
 // DefaultConfig builds an initial valid Config for a chosen profile and aliases.
@@ -51,6 +59,12 @@ func DefaultConfig(profile string, aliases map[string]string) *Config {
 
 // Validate checks configuration values against supported versions and schemas.
 func (c *Config) Validate() error {
+	if c.Inference.ContextLength < 0 || c.Inference.MaxOutputTokens < 0 || c.Inference.MaxConcurrency < 0 {
+		return errors.New("inference limits cannot be negative")
+	}
+	if c.Inference.ContextLength > 0 && c.Inference.MaxOutputTokens >= c.Inference.ContextLength {
+		return errors.New("inference max_output_tokens must be smaller than context_length")
+	}
 	if c.Version <= 0 {
 		return errors.New("version must be positive")
 	}

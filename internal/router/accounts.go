@@ -109,6 +109,9 @@ func validateAccount(a *Account) error {
 	if a.Priority < 0 {
 		return fmt.Errorf("priority cannot be negative")
 	}
+	if a.Weight < 0 || a.Weight > MaxAccountWeight {
+		return fmt.Errorf("weight must be between 0 and %d", MaxAccountWeight)
+	}
 	if a.Tier == "" {
 		a.Tier = TierCheap
 		if a.Provider == ProviderLocal {

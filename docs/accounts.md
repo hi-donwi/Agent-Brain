@@ -207,12 +207,17 @@ native Google sign-in profiles in `agy` remain unverified and are not advertised
 ## Routing and storage
 
 `accounts use` selects a default within that provider. Several provider defaults
-matching a client require an explicit `--account`. `router strategy priority`
-and `router strategy round-robin` control unpinned pools. Rate limits honor
-cooldowns and `Retry-After`; each eligible candidate is attempted at most once
-per request. Unsupported protocols and missing credential references fail
-without substituting another service. Different custom endpoint origins require
-an explicit account selection.
+matching a client require an explicit `--account`. `router strategy priority`,
+`router strategy round-robin`, and `router strategy weighted` control unpinned
+account pools within the selected provider. Weighted mode uses each account's
+integer `weight` (1-1000; default 1) with smooth weighted round-robin, so a 5:1
+configuration averages five selections for the first account per one for the
+second while distributing turns across the pool. Set it when adding an account
+with `--weight`. This does not enable cross-provider failover; providers remain
+explicitly selected. Rate limits honor cooldowns and `Retry-After`; each eligible
+candidate is attempted at most once per request. Unsupported protocols and missing
+credential references fail without substituting another service. Different custom
+endpoint origins require an explicit account selection.
 
 Changes become active after restarting a running gateway. `accounts disable`
 and `accounts remove` change Brain configuration; they do not revoke provider

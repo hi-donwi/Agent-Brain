@@ -37,3 +37,17 @@ func TestRouterStrategyUsesValidatedMutation(t *testing.T) {
 		t.Fatal("strategy was not saved")
 	}
 }
+
+func TestRouterStrategyAcceptsWeighted(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOKAL_HOME", root)
+	cmd := newRouterCmd()
+	cmd.SetArgs([]string{"strategy", "weighted"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := router.LoadRouterConfig(filepath.Join(root, "accounts.yaml"))
+	if err != nil || cfg.Strategy != "weighted" {
+		t.Fatalf("weighted strategy was not saved: %v", err)
+	}
+}

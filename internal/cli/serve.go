@@ -97,6 +97,9 @@ to ~/.lokal/serve.token with mode 0600.`,
 			// Load user config or fall back to default
 			cfg, err := layout.LoadConfig()
 			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("load local inference configuration: %w", err)
+				}
 				cfg = home.DefaultConfig("tiny", map[string]string{
 					"chat":  "qwen2.5-coder-1.5b",
 					"code":  "qwen2.5-coder-1.5b",
