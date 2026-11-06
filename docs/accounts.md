@@ -22,6 +22,18 @@ credential and checks model discovery, or verifies a native client session.
 `--probe --model MODEL` explicitly sends a minimal inference request and may
 incur usage. Native client readiness and gateway readiness are independent.
 
+For a verified native Codex profile, `brain accounts usage codex/work` starts the
+official Codex App Server locally and reads its documented `account/rateLimits/read`
+and `account/usage/read` methods. Rate-limit buckets are quota windows; the token
+activity summary is separate and is not a subscription allowance or an OpenAI API
+bill. Reset timestamps are shown only when Codex returns `resetsAt`; missing data is
+reported as unavailable. `--json` returns the same snapshot. Brain does not persist
+the snapshot, inspect or copy Codex credential files, or invoke any reset-credit
+consumption method. App Server owns native authentication and may apply its normal
+session-refresh behavior. This local App Server authentication integration is for
+local/open-source use only, not commercial or hosted services; other applications
+should use the documented Sign in with ChatGPT integration where eligible.
+
 Model IDs are discovered automatically after OAuth login and when a newly added
 API/local account has an available credential. The wizard does not require model
 IDs. List cached discovery results with `brain accounts models provider/name`, or
@@ -249,6 +261,8 @@ Malformed configuration fails gateway startup instead of becoming an empty pool.
 - [Anthropic credential-use boundaries](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
 - [Codex authentication](https://learn.chatgpt.com/docs/auth)
 - [Codex provider configuration](https://learn.chatgpt.com/docs/config-file/config-reference)
+- [Codex App Server usage and rate limits](https://developers.openai.com/codex/app-server)
+- [Sign in with ChatGPT](https://developers.openai.com/siwc)
 - [Cursor browser and API-key login](https://cursor.com/docs/cli/reference/authentication)
 - [OpenCode provider configuration](https://opencode.ai/docs/providers/)
 - [CLIProxyAPI pinned release](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.29)
