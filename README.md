@@ -156,6 +156,7 @@ See the [account guide](docs/accounts.md) for automatic and external bridge mode
 ```sh
 ./bin/brain router status
 ./bin/brain router strategy round-robin
+./bin/brain router credential agent-control --protocol chat
 ./bin/brain accounts disable openai/personal
 ./bin/brain accounts enable openai/personal
 ./bin/brain accounts remove openai/personal
@@ -173,8 +174,13 @@ live account state when it can authenticate to that gateway and labels a
 configuration snapshot otherwise. Listings and HTTP account metadata omit keys,
 secret references, management credentials, and custom header values.
 
+The credential command requires a configured `routing_profiles.agent-control` profile.
+It writes a profile-scoped token and revision manifest under the private runtime home;
+never copy `serve.token` into Agent-Control.
+
 [Account guide](docs/accounts.md) · [Gateway contracts](docs/gateway-api.md) ·
-[Architecture decision](docs/adr/0011-provider-accounts-and-cli-boundaries.md) ·
+[Provider accounts decision](docs/adr/0011-provider-accounts-and-cli-boundaries.md) ·
+[Profile authorization decision](docs/adr/0014-profile-scoped-inference.md) ·
 [Feature specification](docs/specs/multi-provider-accounts.md)
 
 ## License

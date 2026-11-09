@@ -81,6 +81,20 @@ func TestInferenceLimitsRejectInvalidBudgets(t *testing.T) {
 	}
 }
 
+func TestPrimaryBackendIsDeterministic(t *testing.T) {
+	cfg := &home.Config{Backends: map[string]home.BackendConfig{
+		"z-ollama":   {Endpoint: "http://127.0.0.1:11434", Enabled: true},
+		"a-llamacpp": {Endpoint: "http://127.0.0.1:8080", Enabled: true},
+		"disabled":   {Endpoint: "http://127.0.0.1:9000", Enabled: false},
+	}}
+	for i := 0; i < 100; i++ {
+		name, backend := cfg.PrimaryBackend()
+		if name != "a-llamacpp" || backend.Endpoint != "http://127.0.0.1:8080" {
+			t.Fatalf("primary backend changed across calls: %s %+v", name, backend)
+		}
+	}
+}
+
 func TestLayout_ConfigMethods(t *testing.T) {
 	tmpDir := t.TempDir()
 	l, err := home.Resolve(func(string) string { return tmpDir }, os.UserHomeDir)

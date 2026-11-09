@@ -70,11 +70,27 @@ type Account struct {
 
 // RouterConfig holds settings for multi-account routing, auto-fallback, and token saver.
 type RouterConfig struct {
-	Accounts       []Account         `json:"accounts" yaml:"accounts"`
-	Strategy       string            `json:"strategy" yaml:"strategy"` // priority, round-robin, weighted
-	TokenSaver     bool              `json:"token_saver" yaml:"token_saver"`
-	MaxCooldownSec int               `json:"max_cooldown_sec" yaml:"max_cooldown_sec"`
-	Defaults       map[string]string `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+	Accounts        []Account         `json:"accounts" yaml:"accounts"`
+	RoutingProfiles []RoutingProfile  `json:"routing_profiles,omitempty" yaml:"routing_profiles,omitempty"`
+	Strategy        string            `json:"strategy" yaml:"strategy"` // priority, round-robin, weighted
+	TokenSaver      bool              `json:"token_saver" yaml:"token_saver"`
+	MaxCooldownSec  int               `json:"max_cooldown_sec" yaml:"max_cooldown_sec"`
+	Defaults        map[string]string `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+}
+
+// RoutingProfile maps exact caller-visible model IDs to immutable, authorized targets.
+type RoutingProfile struct {
+	ID      string          `json:"id" yaml:"id"`
+	Targets []RoutingTarget `json:"targets" yaml:"targets"`
+}
+
+// RoutingTarget is one model/provider choice and its complete candidate account set.
+type RoutingTarget struct {
+	Model         string   `json:"model" yaml:"model"`
+	Provider      string   `json:"provider" yaml:"provider"`
+	UpstreamModel string   `json:"upstream_model" yaml:"upstream_model"`
+	AccountIDs    []string `json:"account_ids,omitempty" yaml:"account_ids,omitempty"`
+	Protocols     []string `json:"protocols" yaml:"protocols"`
 }
 
 // DefaultRouterConfig returns safe defaults.

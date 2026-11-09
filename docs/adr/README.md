@@ -18,7 +18,7 @@ numbers after the roadmap is renumbered, are allowed.
 | [0009](0009-gateway-architecture-and-loopback-security.md) | Gateway architecture, loopback security, role routing, and context guard | Accepted |
 | [0010](0010-remote-access-and-gateway-as-backend.md) | Remote access, SSH tunnels, WireGuard overlays, and Gateway-as-Backend | Accepted |
 | [0013](0013-platform-owns-agent-policy-contracts-host-executes.md) | The platform owns agent policy contracts (instructions, permissions, sub-agents); the host executes | Accepted |
+| [0014](0014-profile-scoped-inference.md) | Inference credentials are scoped to content-addressed routing profile revisions and protocol sets | Accepted |
 
 New ADRs use the next number and the same sections: Context, Decision, Consequences
 (positive, negative, neutral), Alternatives considered, Follow-up.
-

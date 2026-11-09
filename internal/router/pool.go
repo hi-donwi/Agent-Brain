@@ -102,10 +102,19 @@ func (p *AccountPool) ListAccounts() []Account {
 
 // SelectAccount chooses an active account for the specified provider using the configured strategy.
 func (p *AccountPool) SelectAccount(provider string) (*Account, error) {
-	return p.selectAccount(provider, "", nil)
+	return p.selectAccount(provider, "", nil, nil)
 }
 
-func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bool) (*Account, error) {
+// SelectAccountFrom chooses only among the explicitly allowed account IDs.
+func (p *AccountPool) SelectAccountFrom(provider string, allowedIDs []string) (*Account, error) {
+	allowed := make(map[string]bool, len(allowedIDs))
+	for _, id := range allowedIDs {
+		allowed[id] = true
+	}
+	return p.selectAccount(provider, "", nil, allowed)
+}
+
+func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bool, allowed map[string]bool) (*Account, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	provider = NormalizeProvider(provider)
@@ -123,7 +132,7 @@ func (p *AccountPool) selectAccount(provider, pinned string, tried map[string]bo
 	// 2. Filter active candidates for provider
 	var candidates []*Account
 	for _, a := range p.accounts {
-		if !a.Enabled || a.Auth == AuthNative || tried[a.ID] || (pinned != "" && pinned != a.ID) {
+		if !a.Enabled || a.Auth == AuthNative || tried[a.ID] || (pinned != "" && pinned != a.ID) || (allowed != nil && !allowed[a.ID]) {
 			continue
 		}
 		if provider != "" && a.Provider != provider {

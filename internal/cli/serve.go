@@ -150,18 +150,22 @@ to ~/.lokal/serve.token with mode 0600.`,
 				bridgeStops = append(bridgeStops, stop)
 			}
 			accountPool := router.NewAccountPool(routerCfg)
+			localBackendName, localBackend := cfg.PrimaryBackend()
 
 			srv, err := gateway.NewServer(gateway.ServerConfig{
-				Addr:         addr,
-				Token:        token,
-				AllowedHosts: allowedHosts,
-				Adapter:      adapter,
-				Catalog:      deps.Catalog,
-				UserConfig:   cfg,
-				TraceStore:   traceStore,
-				Version:      buildinfo.Version,
-				AccountPool:  accountPool,
-				TokenSaver:   routerCfg.TokenSaver,
+				Addr:            addr,
+				Token:           token,
+				AllowedHosts:    allowedHosts,
+				Adapter:         adapter,
+				Catalog:         deps.Catalog,
+				UserConfig:      cfg,
+				TraceStore:      traceStore,
+				Version:         buildinfo.Version,
+				AccountPool:     accountPool,
+				RoutingProfiles: routerCfg.RoutingProfiles,
+				LocalBackend:    localBackendName,
+				LocalEndpoint:   localBackend.Endpoint,
+				TokenSaver:      routerCfg.TokenSaver,
 			})
 			if err != nil {
 				return fmt.Errorf("configure gateway server: %w", err)

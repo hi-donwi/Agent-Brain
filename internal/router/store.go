@@ -47,6 +47,9 @@ func LoadRouterConfig(path string) (RouterConfig, error) {
 	if cfg.Strategy != "priority" && cfg.Strategy != "round-robin" && cfg.Strategy != "weighted" {
 		return RouterConfig{}, fmt.Errorf("invalid router strategy")
 	}
+	if err := ValidateRoutingProfiles(cfg.RoutingProfiles, cfg.Accounts); err != nil {
+		return RouterConfig{}, fmt.Errorf("invalid routing profiles: %w", err)
+	}
 	return cfg, nil
 }
 
