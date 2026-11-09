@@ -28,17 +28,20 @@ const DefaultPort = 52140
 
 // ServerConfig configures the gateway loopback HTTP server.
 type ServerConfig struct {
-	Addr         string
-	Token        string
-	AllowedHosts []string
-	Adapter      backend.Adapter
-	Catalog      *catalog.Catalog
-	UserConfig   *home.Config
-	Residency    *residency.Manager
-	TraceStore   *trace.Store
-	Version      string
-	AccountPool  *router.AccountPool
-	TokenSaver   bool
+	Addr            string
+	Token           string
+	AllowedHosts    []string
+	Adapter         backend.Adapter
+	Catalog         *catalog.Catalog
+	UserConfig      *home.Config
+	Residency       *residency.Manager
+	TraceStore      *trace.Store
+	Version         string
+	AccountPool     *router.AccountPool
+	RoutingProfiles []router.RoutingProfile
+	LocalBackend    string
+	LocalEndpoint   string
+	TokenSaver      bool
 }
 
 // Server is the OpenAI-compatible loopback HTTP server.
@@ -85,6 +88,18 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.AccountPool != nil {
 		s.proxy = router.NewProxyHandler(cfg.AccountPool, cfg.TokenSaver)
 	}
+	accounts := []router.Account(nil)
+	if cfg.AccountPool != nil {
+		accounts = cfg.AccountPool.ListAccounts()
+	}
+	if err := router.ValidateRoutingProfiles(cfg.RoutingProfiles, accounts); err != nil {
+		return nil, fmt.Errorf("invalid gateway routing profiles: %w", err)
+	}
+	for _, profile := range cfg.RoutingProfiles {
+		if _, err := router.RoutingProfileRevisionFor(profile, accounts, cfg.LocalBackend, cfg.LocalEndpoint); err != nil {
+			return nil, fmt.Errorf("invalid gateway routing profile %q: %w", profile.ID, err)
+		}
+	}
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
@@ -100,7 +115,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	// Wrap with security middleware: DNS rebinding protection and Bearer token auth
 	var handler http.Handler = mux
-	handler = AuthMiddleware(cfg.Token)(handler)
+	handler = AuthMiddleware(cfg.Token, InferenceAuthConfig{Profiles: cfg.RoutingProfiles, Accounts: accounts, Pool: cfg.AccountPool, LocalBackend: cfg.LocalBackend, LocalEndpoint: cfg.LocalEndpoint})(handler)
 	handler = HostValidationMiddleware(cfg.AllowedHosts)(handler)
 
 	s.httpServer = &http.Server{
@@ -185,6 +200,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	models := []openAIModel{}
 	now := time.Now().Unix()
+	if scope, ok := InferenceScopeFromContext(ctx); ok {
+		profile, found := router.FindRoutingProfile(s.cfg.RoutingProfiles, scope.ProfileID)
+		if !found {
+			writeAPIError(w, http.StatusForbidden, "routing profile is not available", "invalid_request_error", "profile_scope")
+			return
+		}
+		for _, target := range profile.Targets {
+			if !intersects(target.Protocols, scope.Protocols) {
+				continue
+			}
+			models = append(models, openAIModel{ID: target.Model, Object: "model", Created: now, OwnedBy: "brain"})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openAIModelList{Object: "list", Data: models})
+		return
+	}
 
 	// 1. Add configured semantic roles as virtual models
 	if accountSelection(r) == "" && s.cfg.Adapter != nil {
@@ -265,6 +296,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		Object: "list",
 		Data:   models,
 	})
+}
+
+func intersects(left, right []string) bool {
+	for _, a := range left {
+		for _, b := range right {
+			if a == b {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Chat completions request and response representations.
@@ -602,7 +644,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("invalid json payload: %v", err), "invalid_request_error", "bad_request")
 		return
 	}
-	req.Model = normalizeClientModel(req.Model)
+	var localProfileTarget *router.RoutingTarget
+	if target, ok := s.scopedLocalTarget(r, req.Model, router.ProtocolChat); ok {
+		localProfileTarget = &target
+		req.Model = target.UpstreamModel
+	} else {
+		req.Model = normalizeClientModel(req.Model)
+	}
 
 	if strings.TrimSpace(req.Model) == "" {
 		writeAPIError(w, http.StatusBadRequest, "model field is required", "invalid_request_error", "bad_request")
@@ -626,6 +674,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve requested model/role
 	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, s.cfg.Adapter.Name())
+	if localProfileTarget != nil && (target.IsRole || target.BackendTag != localProfileTarget.UpstreamModel) {
+		writeAPIError(w, http.StatusForbidden, "local model no longer resolves to the authorized target", "invalid_request_error", "profile_scope")
+		return
+	}
 
 	// Context guard
 	numCtx := localContextLimit(target, s.cfg.UserConfig)
@@ -677,7 +729,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	candidateTags := []string{target.BackendTag}
-	if len(req.Tools) == 0 {
+	if len(req.Tools) == 0 && !hasInferenceScope(r.Context()) {
 		candidateTags = append(candidateTags, target.Fallbacks...)
 	}
 	thinkFalse := false
@@ -1051,6 +1103,11 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "model field is required", "invalid_request_error", "bad_request")
 		return
 	}
+	localProfileTarget, scopedLocal := s.scopedLocalTarget(r, req.Model, router.ProtocolEmbeddings)
+	if scopedLocal {
+		target := localProfileTarget
+		req.Model = target.UpstreamModel
+	}
 
 	if s.cfg.Adapter == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "no backend inference adapter configured", "api_error", "backend_unavailable")
@@ -1078,6 +1135,10 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := ResolveModel(req.Model, s.cfg.UserConfig, s.cfg.Catalog, s.cfg.Adapter.Name())
+	if scopedLocal && (target.IsRole || target.BackendTag != localProfileTarget.UpstreamModel) {
+		writeAPIError(w, http.StatusForbidden, "local model no longer resolves to the authorized target", "invalid_request_error", "profile_scope")
+		return
+	}
 	truncateFalse := false
 
 	if s.cfg.Residency != nil {

@@ -8,14 +8,14 @@ OpenAI-style JSON error envelope with `message`, `type`, and stable `code` field
 |---|---|
 | `GET /healthz` | Process health |
 | `GET /v1/accounts` | Redacted runtime account metadata and cooldown state |
-| `GET /v1/models` | Local model/role metadata and configured provider model IDs |
+| `GET /v1/models` | Master token: normal model catalogue; profile token: only its authorized model IDs |
 | `POST /v1/chat/completions` | Local chat or a compatible provider's raw chat protocol |
 | `POST /v1/responses` | Raw Responses protocol for a compatible cloud or explicitly configured local endpoint |
 | `POST /v1/messages` | Anthropic Messages or a bridge explicitly supporting that protocol |
 | `POST /v1/embeddings` | Local embeddings or a compatible cloud provider |
 | `POST /v1beta/models/{model}:generateContent` | Compatible Gemini protocol |
 | `POST /v1beta/models/{model}:streamGenerateContent` | Compatible Gemini streaming protocol |
-| `GET /v1beta/models` and `GET /v1beta/models/{model}` | Upstream Gemini model discovery using the selected account |
+| `GET /v1beta/models` and `GET /v1beta/models/{model}` | Master/account token: upstream discovery; profile token: only its authorized Gemini targets |
 | `POST /v1/tokens` | Existing local token-count estimate |
 
 Local engine orchestration retains its native adapter and residency behavior.
@@ -31,10 +31,20 @@ also supply `x-api-key` or `x-goog-api-key`; Gemini routes accept `?key=TOKEN`.
 These credentials authenticate to Brain and are removed before upstream calls.
 
 The master token is stored privately in the runtime home's `serve.token` file.
-The CLI launcher creates an HMAC-authenticated account-scoped token without
-exposing the master token to its child. Scoped tokens cannot switch accounts
-through another header or select a conflicting provider. Their account must
-still exist and be enabled in the gateway's current configuration snapshot.
+The CLI launcher creates HMAC-authenticated account-scoped credentials without
+exposing the master token to its child. They cannot switch accounts through another
+header or select a conflicting provider; the account must remain in the current
+configuration snapshot.
+
+For Agent-Control, `brain router credential <profile-id> --protocol chat` writes a
+separate owner-only profile-scoped credential. The token's signature binds one profile
+ID, current `sha256` revision, and protocol set. Every inference or model-discovery call
+must also carry matching `X-Brain-Profile` and `X-Brain-Revision` headers. Profile tokens
+are Bearer-only, expose only model IDs authorized by that profile, cannot access account
+metadata, and cannot select a different model, provider or account. The gateway checks
+the revision against its current profile and resolved target endpoints on every request.
+Rotating `serve.token` revokes all derived profile credentials; changing or removing a
+profile invalidates credentials for its old revision.
 
 A client authenticated with the master token can select a canonical account
 through `X-Brain-Account: provider/name` or its immutable ID. Without a pin,
@@ -49,6 +59,18 @@ curl http://127.0.0.1:52140/v1/responses \
   -H "X-Brain-Account: openai/work" \
   -H "Content-Type: application/json" \
   -d '{"model":"openai/MODEL","input":"Hello","stream":true}'
+```
+
+Profile callers use only the exact caller-visible model ID returned by filtered discovery;
+account/provider selector headers are ignored and stripped:
+
+```sh
+curl http://127.0.0.1:52140/v1/chat/completions \
+  -H "Authorization: Bearer $BRAIN_PROFILE_TOKEN" \
+  -H "X-Brain-Profile: agent-control" \
+  -H "X-Brain-Revision: sha256:<profile-revision>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"assistant","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 Use the token from your private runtime file to populate the client environment;

@@ -218,6 +218,51 @@ native Google sign-in profiles in `agy` remain unverified and are not advertised
 
 ## Routing and storage
 
+### Agent-Control routing profiles
+
+`accounts.yaml` may include an explicit profile-to-target allowlist. Each caller-visible
+model ID maps to exactly one provider/upstream model and a complete set of candidate account
+IDs. Local targets name an exact model and have no cloud account IDs:
+
+```yaml
+routing_profiles:
+  - id: agent-control
+    targets:
+      - model: assistant
+        provider: openai
+        upstream_model: gpt-model-id
+        account_ids: [<exact-account-id>]
+        protocols: [chat]
+      - model: local-assistant
+        provider: local
+        upstream_model: exact-backend-model-id
+        protocols: [chat]
+```
+
+The profile revision is computed as `sha256:<hex>` from canonical profile content and its
+resolved targets. For cloud targets that includes provider, account ID and effective base
+URL; for local targets it includes the selected backend name and loopback endpoint. API
+credentials, health/cooldown state, and account ordering are excluded. Profile model IDs
+are exact: there is no implicit model alias, provider, or cross-provider fallback. Existing
+router strategy selects among only the profile's explicit account IDs. Model or destination
+changes require a new revision; requests carrying an old scoped token are denied.
+
+On the Brain host, issue an owner-only chat credential:
+
+```sh
+brain router credential agent-control --protocol chat
+```
+
+The CLI writes `~/.lokal/agent-control.token` with mode `0600` and a non-secret companion
+`~/.lokal/agent-control.token.json` containing the profile ID/revision for Agent-Control's
+local endpoint discovery. Both files must be new; the command never overwrites credentials.
+The issued HMAC credential is scoped to the selected profile revision and protocol set. It
+cannot read `/v1/accounts` or another profile's model list. Rotating `serve.token`, changing
+the profile revision, or removing the profile invalidates the credential; removing a profile
+or rotating the master token is required to revoke it before expiry because tokens do not
+have individual revocation records. The gateway must restart after router configuration
+changes.
+
 `accounts use` selects a default within that provider. Several provider defaults
 matching a client require an explicit `--account`. `router strategy priority`,
 `router strategy round-robin`, and `router strategy weighted` control unpinned

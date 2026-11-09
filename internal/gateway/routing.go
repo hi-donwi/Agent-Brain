@@ -66,7 +66,58 @@ func (s *Server) poolAccount(ref string) (router.Account, error) {
 func (s *Server) tryProxy(w http.ResponseWriter, r *http.Request, body []byte, protocol, forced string) bool {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
+		if hasInferenceScope(r.Context()) {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON payload", "invalid_request_error", "bad_request")
+			return true
+		}
 		return false
+	}
+	if scope, scoped := InferenceScopeFromContext(r.Context()); scoped {
+		profile, found := router.FindRoutingProfile(s.cfg.RoutingProfiles, scope.ProfileID)
+		if !found {
+			writeAPIError(w, http.StatusForbidden, "routing profile is not available", "invalid_request_error", "profile_scope")
+			return true
+		}
+		var requestedModel string
+		_ = json.Unmarshal(payload["model"], &requestedModel)
+		targetPath := r.URL.Path
+		if protocol == router.ProtocolGemini {
+			if r.URL.Query().Has("key") {
+				writeAPIError(w, http.StatusForbidden, "profile inference does not accept upstream API keys", "invalid_request_error", "profile_scope")
+				return true
+			}
+			requestedModel = strings.TrimPrefix(targetPath, "/v1beta/models/")
+			requestedModel, _, _ = strings.Cut(requestedModel, ":")
+		}
+		target, ok := router.FindRoutingTarget(profile, requestedModel, protocol)
+		if !ok {
+			writeAPIError(w, http.StatusForbidden, "model is outside the authorized routing profile", "invalid_request_error", "profile_scope")
+			return true
+		}
+		if target.Provider == router.ProviderLocal {
+			return false
+		}
+		if s.proxy == nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "profile target router is unavailable", "api_error", "account_unavailable")
+			return true
+		}
+		if protocol == router.ProtocolGemini {
+			_, suffix, _ := strings.Cut(strings.TrimPrefix(targetPath, "/v1beta/models/"), ":")
+			targetPath = "/v1beta/models/" + target.UpstreamModel + ":" + suffix
+			if r.URL.RawQuery != "" {
+				targetPath += "?" + r.URL.RawQuery
+			}
+		} else {
+			payload["model"], _ = json.Marshal(target.UpstreamModel)
+			body, _ = json.Marshal(payload)
+		}
+		resp, _, err := s.proxy.ForwardProfileRequest(r.Context(), target, targetPath, body, r.Header)
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, "profile inference request failed", "api_error", "upstream_error")
+			return true
+		}
+		_ = router.StreamResponse(w, resp)
+		return true
 	}
 	if s.proxy == nil && accountSelection(r) == "" && r.Header.Get("X-Brain-Provider") == "" {
 		return false
@@ -154,6 +205,24 @@ func (s *Server) tryProxy(w http.ResponseWriter, r *http.Request, body []byte, p
 	return true
 }
 
+func hasInferenceScope(ctx context.Context) bool {
+	_, ok := InferenceScopeFromContext(ctx)
+	return ok
+}
+
+func (s *Server) scopedLocalTarget(r *http.Request, model, protocol string) (router.RoutingTarget, bool) {
+	scope, ok := InferenceScopeFromContext(r.Context())
+	if !ok {
+		return router.RoutingTarget{}, false
+	}
+	profile, ok := router.FindRoutingProfile(s.cfg.RoutingProfiles, scope.ProfileID)
+	if !ok {
+		return router.RoutingTarget{}, false
+	}
+	target, ok := router.FindRoutingTarget(profile, model, protocol)
+	return target, ok && target.Provider == router.ProviderLocal
+}
+
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -171,6 +240,36 @@ func withAccountScope(ctx context.Context, id string) context.Context {
 }
 
 func (s *Server) handleGeminiModelMetadata(w http.ResponseWriter, r *http.Request) {
+	if scope, scoped := InferenceScopeFromContext(r.Context()); scoped {
+		profile, found := router.FindRoutingProfile(s.cfg.RoutingProfiles, scope.ProfileID)
+		if !found {
+			writeAPIError(w, http.StatusForbidden, "routing profile is not available", "invalid_request_error", "profile_scope")
+			return
+		}
+		models := make([]map[string]any, 0, len(profile.Targets))
+		requested := strings.TrimPrefix(r.URL.Path, "/v1beta/models/")
+		requested = strings.TrimPrefix(requested, "models/")
+		for _, target := range profile.Targets {
+			if !containsString(target.Protocols, router.ProtocolGemini) || !containsString(scope.Protocols, router.ProtocolGemini) {
+				continue
+			}
+			modelName := strings.TrimPrefix(target.Model, "models/")
+			if r.URL.Path != "/v1beta/models" && requested != modelName {
+				continue
+			}
+			models = append(models, map[string]any{
+				"name":                       "models/" + modelName,
+				"supportedGenerationMethods": []string{"generateContent", "streamGenerateContent"},
+			})
+		}
+		if r.URL.Path != "/v1beta/models" && len(models) == 0 {
+			writeAPIError(w, http.StatusForbidden, "model is outside the authorized routing profile", "invalid_request_error", "profile_scope")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
+		return
+	}
 	provider := router.ProviderGemini
 	pinned := ""
 	if selected := accountSelection(r); selected != "" {

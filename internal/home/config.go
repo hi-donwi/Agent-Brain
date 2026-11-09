@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -93,12 +94,19 @@ func (c *Config) Validate() error {
 
 // PrimaryBackend returns the name and configuration of the first enabled backend.
 func (c *Config) PrimaryBackend() (string, BackendConfig) {
-	for name, b := range c.Backends {
+	names := make([]string, 0, len(c.Backends))
+	for name := range c.Backends {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b := c.Backends[name]
 		if b.Enabled {
 			return name, b
 		}
 	}
-	for name, b := range c.Backends {
+	for _, name := range names {
+		b := c.Backends[name]
 		return name, b
 	}
 	return "ollama", BackendConfig{

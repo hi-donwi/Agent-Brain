@@ -40,15 +40,20 @@ func (h *ProxyHandler) ForwardRequest(ctx context.Context, provider string, targ
 
 // ForwardSelectedRequest pins an explicit account or tries each pool candidate once.
 func (h *ProxyHandler) ForwardSelectedRequest(ctx context.Context, provider, pinned, targetPath string, body []byte, headers http.Header) (*http.Response, *Account, error) {
-	return h.forward(ctx, provider, pinned, targetPath, http.MethodPost, body, headers)
+	return h.forward(ctx, provider, pinned, nil, targetPath, http.MethodPost, body, headers)
+}
+
+// ForwardProfileRequest forwards through only the account IDs authorized by a routing profile.
+func (h *ProxyHandler) ForwardProfileRequest(ctx context.Context, target RoutingTarget, targetPath string, body []byte, headers http.Header) (*http.Response, *Account, error) {
+	return h.forward(ctx, target.Provider, "", target.AccountIDs, targetPath, http.MethodPost, body, headers)
 }
 
 // ForwardMetadataRequest preserves the provider's model metadata without inference.
 func (h *ProxyHandler) ForwardMetadataRequest(ctx context.Context, provider, pinned, path string, headers http.Header) (*http.Response, *Account, error) {
-	return h.forward(ctx, provider, pinned, path, http.MethodGet, nil, headers)
+	return h.forward(ctx, provider, pinned, nil, path, http.MethodGet, nil, headers)
 }
 
-func (h *ProxyHandler) forward(ctx context.Context, provider, pinned, targetPath, method string, body []byte, headers http.Header) (*http.Response, *Account, error) {
+func (h *ProxyHandler) forward(ctx context.Context, provider, pinned string, allowedIDs []string, targetPath, method string, body []byte, headers http.Header) (*http.Response, *Account, error) {
 	definition, err := LookupProvider(provider)
 	if err != nil {
 		return nil, nil, err
@@ -56,8 +61,12 @@ func (h *ProxyHandler) forward(ctx context.Context, provider, pinned, targetPath
 	provider = definition.ID
 	if pinned == "" && (provider == "custom" || provider == "opencode-zen") {
 		origins := make(map[string]bool)
+		allowed := make(map[string]bool, len(allowedIDs))
+		for _, id := range allowedIDs {
+			allowed[id] = true
+		}
 		for _, a := range h.pool.ListAccounts() {
-			if a.Enabled && a.Provider == provider {
+			if a.Enabled && a.Provider == provider && (allowedIDs == nil || allowed[a.ID]) {
 				origins[strings.TrimRight(a.BaseURL, "/")] = true
 			}
 		}
@@ -78,7 +87,14 @@ func (h *ProxyHandler) forward(ctx context.Context, provider, pinned, targetPath
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		acc, err := h.pool.selectAccount(provider, pinned, tried)
+		allowed := map[string]bool(nil)
+		if allowedIDs != nil {
+			allowed = make(map[string]bool, len(allowedIDs))
+			for _, id := range allowedIDs {
+				allowed[id] = true
+			}
+		}
+		acc, err := h.pool.selectAccount(provider, pinned, tried, allowed)
 		if err != nil {
 			return nil, nil, fmt.Errorf("account selection failed: %w", err)
 		}
@@ -227,7 +243,7 @@ func (h *ProxyHandler) forward(ctx context.Context, provider, pinned, targetPath
 
 func sensitiveHeader(k string) bool {
 	switch strings.ToLower(k) {
-	case "authorization", "proxy-authorization", "x-api-key", "x-goog-api-key", "cookie", "set-cookie", "x-brain-account", "x-brain-provider":
+	case "authorization", "proxy-authorization", "x-api-key", "x-goog-api-key", "cookie", "set-cookie", "x-brain-account", "x-brain-provider", "x-brain-profile", "x-brain-revision":
 		return true
 	}
 	return false
