@@ -76,6 +76,42 @@ func (s *Store) ListCollections(ctx context.Context) ([]Collection, error) {
 	return cols, rows.Err()
 }
 
+// ListCollectionSummaries returns collection metadata and aggregate document/chunk counts.
+// It intentionally does not return document paths or content.
+func (s *Store) ListCollectionSummaries(ctx context.Context) ([]CollectionSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	query := `SELECT c.id, c.name, c.model, c.dimension, c.created_at,
+	        COALESCE(d.document_count, 0), COALESCE(k.chunk_count, 0), COALESCE(d.total_bytes, 0)
+      FROM collections c
+      LEFT JOIN (
+        SELECT collection_id, COUNT(*) AS document_count, SUM(size_bytes) AS total_bytes
+        FROM documents GROUP BY collection_id
+      ) d ON d.collection_id = c.id
+      LEFT JOIN (
+        SELECT collection_id, COUNT(*) AS chunk_count FROM chunks GROUP BY collection_id
+      ) k ON k.collection_id = c.id
+      ORDER BY c.created_at ASC;`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list collection summaries: %w", err)
+	}
+	defer rows.Close()
+	var summaries []CollectionSummary
+	for rows.Next() {
+		var summary CollectionSummary
+		if err := rows.Scan(
+			&summary.Collection.ID, &summary.Collection.Name, &summary.Collection.Model,
+			&summary.Collection.Dimension, &summary.Collection.CreatedAt,
+			&summary.Documents, &summary.Chunks, &summary.Bytes,
+		); err != nil {
+			return nil, fmt.Errorf("scan collection summary: %w", err)
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
+}
+
 // DeleteCollection deletes a collection and cascades to its documents, chunks, and FTS entries.
 func (s *Store) DeleteCollection(ctx context.Context, id string) error {
 	s.mu.Lock()

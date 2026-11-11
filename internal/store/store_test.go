@@ -149,6 +149,35 @@ func TestStore_CollectionsAndDocuments_Lifecycle(t *testing.T) {
 	}
 }
 
+func TestListCollectionSummariesReturnsCountsWithoutDocumentRows(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "summary.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	collection, err := s.CreateCollection(ctx, "docs", "nomic-embed-text", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, size := range []int64{100, 250} {
+		doc := &store.Document{CollectionID: collection.ID, Path: string(rune('a'+i)) + ".md", Hash: "hash", SizeBytes: size}
+		if err := s.UpsertDocument(ctx, doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.InsertChunks(ctx, []store.Chunk{{CollectionID: collection.ID, DocumentID: doc.ID, ChunkIndex: 0, Path: doc.Path, StartLine: 1, EndLine: 1, Content: "safe"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summaries, err := s.ListCollectionSummaries(ctx)
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries=%+v err=%v", summaries, err)
+	}
+	if summaries[0].Collection.Name != "docs" || summaries[0].Documents != 2 || summaries[0].Chunks != 2 || summaries[0].Bytes != 350 {
+		t.Fatalf("unexpected summary: %+v", summaries[0])
+	}
+}
+
 func TestStore_VectorOperations(t *testing.T) {
 	v1 := []float32{3.0, 4.0}
 	norm := store.Normalize(v1)

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Agent Brain management</title>
+  <link rel="stylesheet" href="/manage-ui/style.css">
+  <script src="/manage-ui/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">AGENT BRAIN · OPERATOR CONSOLE</p>
+      <h1>Provider and routing control</h1>
+      <p class="lead">Account credentials are sent to this Brain service and stored by Brain. They are never returned to Agent Control.</p>
+    </header>
+
+    <form id="connect-form" class="panel connect-form">
+      <label for="management-token">Brain management credential</label>
+      <input id="management-token" type="password" autocomplete="current-password" spellcheck="false" required>
+      <p class="hint">Create it on this Brain host with <code>brain router management-credential</code>, then transfer it from the owner-only file to this Brain-origin page. Never paste it into Agent Control. It is kept only in this page session.</p>
+      <div class="actions">
+        <button class="primary" type="submit">Connect to Brain</button>
+        <button id="disconnect" type="button" class="secondary" hidden>Disconnect</button>
+      </div>
+    </form>
+
+    <p id="status" role="status" aria-live="polite"></p>
+    <p id="error" role="alert" hidden></p>
+    <section id="workspace" hidden>
+      <section class="panel" aria-labelledby="provider-title">
+        <div class="section-heading"><div><p class="eyebrow">CATALOG</p><h2 id="provider-title">Provider capabilities</h2></div></div>
+        <ul id="providers" class="provider-grid"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="account-title">
+        <div class="section-heading"><div><p class="eyebrow">IDENTITIES</p><h2 id="account-title">Provider accounts</h2></div></div>
+        <ul id="accounts" class="account-list"></ul>
+        <p class="hint">Antigravity/Codex OAuth sign-in runs in this Brain-origin console. Native client login remains inside the official local CLI.</p>
+        <div id="login-flow" class="login-flow" hidden>
+          <strong id="login-flow-title">OAuth sign-in</strong>
+          <p id="login-flow-status" role="status" aria-live="polite"></p>
+          <a id="oauth-link" target="_blank" rel="noopener noreferrer" hidden>Open provider sign-in</a>
+          <button id="cancel-login" type="button" class="secondary">Cancel sign-in</button>
+        </div>
+        <form id="add-account" class="add-form">
+          <h3>Add an account</h3>
+          <label for="provider">Provider</label>
+          <select id="provider" required></select>
+          <label for="name">Account name</label>
+          <input id="name" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" required>
+          <label for="auth">Authentication</label>
+          <select id="auth"></select>
+          <label for="credential">Provider API key <span class="optional">(write-only)</span></label>
+          <input id="credential" type="password" autocomplete="new-password" spellcheck="false">
+          <p class="hint">The key is sent directly to Brain and stored in Brain's private credential directory.</p>
+          <label for="credential-ref">Or Brain credential reference</label>
+          <input id="credential-ref" placeholder="env:PROVIDER_KEY or file:/absolute/path" autocomplete="off">
+          <label for="base-url">Provider base URL</label>
+          <input id="base-url" type="url" autocomplete="url">
+          <label for="priority">Routing priority</label>
+          <input id="priority" type="number" min="0" step="1" value="1" inputmode="numeric">
+          <button type="submit" class="primary">Add account</button>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="local-runtime-title">
+        <div class="section-heading"><div><p class="eyebrow">LOCAL INFERENCE</p><h2 id="local-runtime-title">Backends and models</h2></div></div>
+        <p class="hint">Actions apply to this Brain host's configured backend. Pulls use embedded catalog IDs and a disk safety check. Brain does not install or launch operating-system services from HTTP.</p>
+        <div id="runtime-summary" class="runtime-summary" role="status" aria-live="polite">Runtime state is not loaded.</div>
+        <div class="runtime-controls">
+          <label for="backend-select">Configured inference backend</label>
+          <select id="backend-select"></select>
+          <button id="select-backend" type="button" class="secondary">Select backend</button>
+          <label for="hardware-profile">Hardware model profile</label>
+          <select id="hardware-profile"></select>
+          <button id="select-profile" type="button" class="secondary">Apply profile</button>
+        </div>
+        <div class="model-columns">
+          <div>
+            <h3>Installed models</h3>
+            <ul id="installed-models" class="model-list"></ul>
+          </div>
+          <div>
+            <h3>Catalog models</h3>
+            <ul id="available-models" class="model-list"></ul>
+          </div>
+        </div>
+        <div id="model-job-panel" class="model-job" hidden>
+          <strong id="model-job-title">Model download</strong>
+          <p id="model-job-status" role="status" aria-live="polite"></p>
+          <progress id="model-job-progress" max="100" value="0"></progress>
+          <button id="cancel-model-job" type="button" class="secondary">Cancel download</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="service-title">
+        <div class="section-heading"><div><p class="eyebrow">OPERATING SYSTEM</p><h2 id="service-title">Brain background service</h2></div></div>
+        <div id="service-status" class="runtime-summary" role="status" aria-live="polite"></div>
+        <p class="hint">Service installation/removal is controlled by the Brain CLI because it changes launchd/systemd state and can stop this gateway. The console does not invoke OS service commands.</p>
+        <div class="model-actions">
+          <code id="service-install-command">brain service install</code>
+          <code id="service-uninstall-command">brain service uninstall</code>
+          <button id="refresh-service-status" type="button" class="secondary">Refresh status</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="profile-title">
+        <div class="section-heading"><div><p class="eyebrow">ROUTING</p><h2 id="profile-title">Routing profiles</h2></div></div>
+        <p class="hint">Changing a profile creates a new revision. Update each affected project egress policy before relying on it.</p>
+        <ul id="profiles" class="profile-list"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="knowledge-title">
+        <div class="section-heading"><div><p class="eyebrow">LOCAL KNOWLEDGE</p><h2 id="knowledge-title">Registered RAG sources</h2></div></div>
+        <p class="hint">Only Brain-registered roots can be indexed or searched. Paths are kept in Brain's private config and are never sent by this page. Indexing and embeddings use the local Ollama backend only.</p>
+        <ul id="knowledge-sources" class="model-list"></ul>
+        <p class="hint">Register a new root in a Brain terminal with <code>brain knowledge source add --id docs --name "Project docs" --root /absolute/path --collection docs</code>.</p>
+        <form id="knowledge-search" class="add-form">
+          <h3>Search an indexed source</h3>
+          <label for="knowledge-source-select">Registered source</label>
+          <select id="knowledge-source-select" required></select>
+          <label for="knowledge-query">Search query</label>
+          <textarea id="knowledge-query" rows="3" maxlength="4096" required></textarea>
+          <button type="submit" class="primary">Search locally</button>
+        </form>
+        <ul id="knowledge-results" class="knowledge-results"></ul>
+        <div id="knowledge-job-panel" class="model-job" hidden>
+          <strong id="knowledge-job-title">Reindexing source</strong>
+          <p id="knowledge-job-status" role="status" aria-live="polite"></p>
+          <button id="cancel-knowledge-job" type="button" class="secondary">Cancel indexing</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="skills-title">
+        <div class="section-heading"><div><p class="eyebrow">SKILLS AND TOOLS</p><h2 id="skills-title">Brain user skills</h2></div></div>
+        <p class="hint">This unscoped console lists only Brain-user skills. Project and configured skill sources remain private to their caller. Skill files are displayed as text and never executed here.</p>
+        <form id="brain-skill-import" class="add-form">
+          <h3>Install a Brain-user skill</h3>
+          <p class="hint">Paste one SKILL.md. Brain validates the name/format and scans for secrets and unsafe instruction patterns. Existing skills are never overwritten.</p>
+          <label for="new-skill-name">Skill ID</label>
+          <input id="new-skill-name" required maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" autocomplete="off">
+          <label for="new-skill-markdown">SKILL.md content</label>
+          <textarea id="new-skill-markdown" rows="10" maxlength="65536" spellcheck="false" required></textarea>
+          <button type="submit" class="primary">Validate and install</button>
+        </form>
+        <ul id="brain-skills" class="model-list"></ul>
+        <div id="skill-detail" class="skill-detail" hidden>
+          <strong id="skill-detail-title"></strong>
+          <p id="skill-detail-description" class="hint"></p>
+          <pre id="skill-detail-body"></pre>
+          <p id="skill-detail-validation" class="hint" role="status" aria-live="polite"></p>
+          <div class="model-actions">
+            <button id="validate-skill" type="button" class="secondary">Validate skill</button>
+            <button id="remove-skill" type="button" class="secondary">Remove user skill</button>
+          </div>
+        </div>
+        <p class="hint">Install skills from a local path with <code>brain skills add /absolute/path/to/skill</code>. The web console accepts no filesystem path.</p>
+        <div class="section-heading mcp-heading"><div><p class="eyebrow">MCP</p><h3>Read-only tool server</h3></div><span class="tool-transport">stdio · CLI-owned</span></div>
+        <ul id="mcp-tools" class="model-list"></ul>
+        <p class="hint">Start the MCP process from a Brain terminal with <code>brain mcp</code>. This console inventories tools but never starts the process or invokes them outside a project policy.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="trace-eval-title">
+        <div class="section-heading"><div><p class="eyebrow">OBSERVABILITY</p><h2 id="trace-eval-title">Trace summaries and local evaluation</h2></div></div>
+        <p class="hint">Trace data can contain user/client content. This unscoped view shows aggregate metrics only; raw records and imports remain local CLI operations.</p>
+        <ul id="trace-summaries" class="model-list"></ul>
+        <form id="local-evaluation" class="add-form">
+          <h3>Local model smoke evaluation</h3>
+          <p class="hint">Runs a fixed synthetic prompt against one installed catalog model on loopback Ollama. No trace or project content is used.</p>
+          <label for="evaluation-model">Installed catalog model</label>
+          <select id="evaluation-model" required></select>
+          <button type="submit" class="primary">Run local smoke test</button>
+        </form>
+        <div id="evaluation-job-panel" class="model-job" hidden>
+          <strong id="evaluation-job-title">Local evaluation</strong>
+          <p id="evaluation-job-status" role="status" aria-live="polite"></p>
+          <ul id="evaluation-assertions" class="evaluation-assertions"></ul>
+          <button id="cancel-evaluation-job" type="button" class="secondary">Cancel evaluation</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="forge-title">
+        <div class="section-heading"><div><p class="eyebrow">SKILL FORGE</p><h2 id="forge-title">Candidate gates</h2></div></div>
+        <p class="hint">Candidates are untrusted and never activated automatically. This unscoped console shows opaque IDs and gate status only; inspect full candidate content and provenance locally with <code>brain forge candidates</code> and <code>brain skills review-candidate &lt;name&gt;</code>.</p>
+        <ul id="forge-candidates" class="model-list"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="cli-title">
+        <div class="section-heading"><div><p class="eyebrow">BRAIN OPERATIONS</p><h2 id="cli-title">Other Brain capabilities</h2></div></div>
+        <p class="hint">This console covers typed backend/model, provider/routing, registered-root RAG, user-skill, aggregate-trace, local-smoke-eval, and reviewed-Forge-candidate operations. It does not install OS services, read raw traces, run custom eval specs, start MCP, or execute arbitrary CLI commands.</p>
+        <ul class="capability-list">
+          <li><code>brain setup</code> / <code>brain service</code><span>Install and start backend/gateway services</span></li>
+          <li><code>brain skills add</code> / <code>brain mcp</code><span>Install skills and launch the stdio tool server</span></li>
+          <li><code>brain repo-map</code> / <code>brain symbols</code><span>Code knowledge and symbol maps</span></li>
+          <li><code>brain trace import</code> / <code>brain eval</code><span>Raw trace import and custom evaluations</span></li>
+          <li><code>brain forge mine/draft/harden</code><span>Generate and refine candidates from local traces</span></li>
+        </ul>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

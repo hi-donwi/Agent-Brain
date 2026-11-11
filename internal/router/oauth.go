@@ -155,63 +155,94 @@ func (b BridgeClient) Models(ctx context.Context, provider, expected string) ([]
 	return models, nil
 }
 
-// Login prints/opens only a validated provider authorization URL, then verifies identity.
-func (b BridgeClient) Login(ctx context.Context, provider string, onURL func(string) error) (id string, err error) {
+// BeginLogin starts a provider-specific OAuth session and returns only its validated
+// authorization URL and opaque bridge state for an in-process session manager.
+func (b BridgeClient) BeginLogin(ctx context.Context, provider string) (authorizationURL, state string, err error) {
 	if err := b.verifyConfiguration(ctx); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if provider != ProviderAntigravity && provider != ProviderCodex {
-		return "", fmt.Errorf("OAuth bridge authentication is not supported for this provider")
+		return "", "", fmt.Errorf("OAuth bridge authentication is not supported for this provider")
 	}
 	files, err := b.credentials(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(files) > 0 {
-		return "", fmt.Errorf("new OAuth login requires an empty dedicated bridge; use accounts test for an existing connection")
+		return "", "", fmt.Errorf("new OAuth login requires an empty dedicated bridge; use accounts test for an existing connection")
 	}
 	var start struct{ Status, URL, State string }
 	path := "/oauth/auth-url?provider=" + url.QueryEscape(provider) + "&is_webui=true"
 	if err = b.request(ctx, http.MethodGet, path, &start); err != nil {
-		return "", err
+		return "", "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	completed := false
-	defer func() {
-		if !completed && start.State != "" {
-			cleanup, stop := context.WithTimeout(context.Background(), 2*time.Second)
-			defer stop()
-			_ = b.request(cleanup, http.MethodDelete, "/oauth/session?state="+url.QueryEscape(start.State), nil)
-		}
-	}()
 	u, parseErr := url.Parse(start.URL)
-	allowed := parseErr == nil && u.Scheme == "https" && u.User == nil && u.Fragment == "" && start.State != "" && u.Query().Get("state") == start.State
+	allowed := parseErr == nil && u.Scheme == "https" && u.User == nil && u.Fragment == "" && validOAuthState(start.State)
 	if allowed {
-		host := u.Hostname()
-		allowed = (provider == ProviderAntigravity && host == "accounts.google.com") || (provider == ProviderCodex && host == "auth.openai.com")
+		states := u.Query()["state"]
+		expectedHost := "accounts.google.com"
+		if provider == ProviderCodex {
+			expectedHost = "auth.openai.com"
+		}
+		allowed = u.Host == expectedHost && len(states) == 1 && states[0] == start.State
 	}
 	if start.Status != "ok" || !allowed {
-		return "", fmt.Errorf("bridge returned an invalid provider authorization URL or state")
+		if validOAuthState(start.State) {
+			cleanup, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = b.CancelLogin(cleanup, start.State)
+			stop()
+		}
+		return "", "", fmt.Errorf("bridge returned an invalid provider authorization URL or state")
 	}
-	if onURL != nil {
-		if err = onURL(start.URL); err != nil {
-			return "", err
+	return start.URL, start.State, nil
+}
+
+// PollLogin returns pending until the bridge confirms the provider callback.
+func (b BridgeClient) PollLogin(ctx context.Context, provider, state string) (id string, complete bool, err error) {
+	if (provider != ProviderAntigravity && provider != ProviderCodex) || !validOAuthState(state) {
+		return "", false, fmt.Errorf("invalid OAuth login session")
+	}
+	var status struct{ Status string }
+	if err := b.request(ctx, http.MethodGet, "/oauth/status?state="+url.QueryEscape(state), &status); err != nil {
+		return "", false, err
+	}
+	switch status.Status {
+	case "wait":
+		return "", false, nil
+	case "ok":
+		id, err := b.Verify(ctx, provider, "")
+		return id, err == nil, err
+	default:
+		return "", false, fmt.Errorf("provider login was denied or expired; retry accounts login")
+	}
+}
+
+func (b BridgeClient) CancelLogin(ctx context.Context, state string) error {
+	if !validOAuthState(state) {
+		return fmt.Errorf("invalid OAuth login session")
+	}
+	return b.request(ctx, http.MethodDelete, "/oauth/session?state="+url.QueryEscape(state), nil)
+}
+
+func validOAuthState(state string) bool {
+	if len(state) == 0 || len(state) > 512 {
+		return false
+	}
+	for _, character := range state {
+		if character < 0x21 || character > 0x7e {
+			return false
 		}
 	}
+	return true
+}
+
+func (b BridgeClient) WaitLogin(ctx context.Context, provider, state string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	for {
-		var status struct{ Status string }
-		if err = b.request(ctx, http.MethodGet, "/oauth/status?state="+url.QueryEscape(start.State), &status); err != nil {
-			return "", err
-		}
-		switch status.Status {
-		case "ok":
-			id, err = b.Verify(ctx, provider, "")
-			completed = err == nil
+		id, complete, err := b.PollLogin(ctx, provider, state)
+		if err != nil || complete {
 			return id, err
-		case "wait":
-		default:
-			return "", fmt.Errorf("provider login was denied or expired; retry accounts login")
 		}
 		select {
 		case <-ctx.Done():
@@ -219,4 +250,28 @@ func (b BridgeClient) Login(ctx context.Context, provider string, onURL func(str
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// Login preserves the CLI's synchronous callback flow on top of the staged API.
+func (b BridgeClient) Login(ctx context.Context, provider string, onURL func(string) error) (string, error) {
+	authorizationURL, state, err := b.BeginLogin(ctx, provider)
+	if err != nil {
+		return "", err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			cleanup, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			defer stop()
+			_ = b.CancelLogin(cleanup, state)
+		}
+	}()
+	if onURL != nil {
+		if err := onURL(authorizationURL); err != nil {
+			return "", err
+		}
+	}
+	id, err := b.WaitLogin(ctx, provider, state)
+	completed = err == nil
+	return id, err
 }

@@ -128,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, spec *TaskSpec) (*EvalResult, error) {
 		}
 		if spec.MaxTokens > 0 {
 			chatReq.Options = &backend.ChatOptions{
-				NumCtx: spec.MaxTokens,
+				NumPredict: spec.MaxTokens,
 			}
 		}
 

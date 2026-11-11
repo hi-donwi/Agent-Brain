@@ -19,6 +19,15 @@ numbers after the roadmap is renumbered, are allowed.
 | [0010](0010-remote-access-and-gateway-as-backend.md) | Remote access, SSH tunnels, WireGuard overlays, and Gateway-as-Backend | Accepted |
 | [0013](0013-platform-owns-agent-policy-contracts-host-executes.md) | The platform owns agent policy contracts (instructions, permissions, sub-agents); the host executes | Accepted |
 | [0014](0014-profile-scoped-inference.md) | Inference credentials are scoped to content-addressed routing profile revisions and protocol sets | Accepted |
+| [0015](0015-brain-management-api.md) | Separate Brain management credentials and typed provider/account/profile APIs | Accepted |
+| [0016](0016-narrow-brain-origin-management-console.md) | Brain-origin operator UI is a narrow exception to no general Brain web UI | Accepted |
+| [0017](0017-typed-local-backend-and-model-management.md) | Catalog-bounded local backend/model operations with confirmation and safety gates | Accepted |
+| [0018](0018-configured-root-rag-management.md) | RAG management uses CLI-registered canonical roots and local embeddings only | Accepted |
+| [0019](0019-user-skills-and-mcp-management-inventory.md) | Unscoped management lists Brain-user skills and static read-only MCP metadata only | Accepted |
+| [0020](0020-safe-trace-inventory-and-local-smoke-evaluation.md) | Trace summaries are pseudonymous; evaluation is a fixed local smoke suite | Accepted |
+| [0021](0021-unscoped-forge-candidate-management.md) | Forge promotion in Settings is gated by local human review and safety evidence | Accepted |
+| [0022](0022-redacted-service-status-and-cli-owned-lifecycle.md) | Service status is redacted; OS install/uninstall remains CLI-owned | Accepted |
+| [0023](0023-single-file-user-skill-import.md) | Unscoped Settings may install one validated Brain-user SKILL.md only | Accepted |
 
 New ADRs use the next number and the same sections: Context, Decision, Consequences
 (positive, negative, neutral), Alternatives considered, Follow-up.

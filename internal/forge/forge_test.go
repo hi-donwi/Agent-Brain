@@ -9,6 +9,7 @@ import (
 
 	"github.com/hi-donwi/Agent-Brain/internal/skills"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
+	"gopkg.in/yaml.v3"
 )
 
 func TestForge_MineAndDraft(t *testing.T) {
@@ -122,6 +123,11 @@ description: Use when running test helper workflows for code testing
 1. Run tests.
 `
 	_ = os.WriteFile(filepath.Join(candDir, "SKILL.md"), []byte(skillContent), 0o600)
+	provenance, err := yaml.Marshal(Provenance{ClusterID: "cluster", SourceSessions: []string{"session"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(candDir, "provenance.yaml"), provenance, 0o600)
 
 	evaluator := NewEvaluator(candidatesDir, nil)
 	report, err := evaluator.EvaluateCandidate(context.Background(), "test-helper")
@@ -135,10 +141,13 @@ description: Use when running test helper workflows for code testing
 	if report.Precision < 0.5 {
 		t.Errorf("expected reasonable precision, got %f", report.Precision)
 	}
+	if _, err := ReviewCandidate(candidatesDir, "test-helper", false); err != nil {
+		t.Fatalf("review candidate: %v", err)
+	}
 
 	// Promote skill
 	promoter := NewPromoter(candidatesDir, skillsDir)
-	res, err := promoter.Promote("test-helper", false)
+	res, err := promoter.Promote("test-helper")
 	if err != nil {
 		t.Fatalf("promoter.Promote failed: %v", err)
 	}
@@ -162,8 +171,11 @@ description: Use when running updated test helper workflows
 `
 	_ = os.WriteFile(filepath.Join(candDir, "SKILL.md"), []byte(newSkillContent), 0o600)
 	_, _ = evaluator.EvaluateCandidate(context.Background(), "test-helper")
+	if _, err := ReviewCandidate(candidatesDir, "test-helper", false); err != nil {
+		t.Fatalf("review updated candidate: %v", err)
+	}
 
-	res2, err := promoter.Promote("test-helper", false)
+	res2, err := promoter.Promote("test-helper")
 	if err != nil {
 		t.Fatalf("second promote failed: %v", err)
 	}

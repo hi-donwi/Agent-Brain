@@ -39,6 +39,7 @@ backends, indexes code and files with hybrid retrieval (RAG), and serves knowled
 	root.AddCommand(newIndexCmd(defaultRagDeps()))
 	root.AddCommand(newSearchCmd(defaultRagDeps()))
 	root.AddCommand(newAskCmd(defaultRagDeps()))
+	root.AddCommand(newKnowledgeCmd())
 	root.AddCommand(newSkillsCmd(defaultSkillsDeps()))
 	root.AddCommand(newMcpCmd(defaultMcpDeps()))
 	root.AddCommand(newRepoMapCmd())

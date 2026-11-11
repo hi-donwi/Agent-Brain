@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -29,14 +28,10 @@ func NewEvaluator(candidatesDir string, adapter backend.Adapter) *Evaluator {
 
 // EvaluateCandidate evaluates a candidate skill by name against fixtures.
 func (e *Evaluator) EvaluateCandidate(ctx context.Context, skillName string) (*CandidateEvalReport, error) {
-	candidateDir := filepath.Join(e.CandidatesDir, skillName)
-	skillPath := filepath.Join(candidateDir, "SKILL.md")
-
-	data, err := os.ReadFile(skillPath)
+	candidateDir, err := CandidateDirectory(e.CandidatesDir, skillName)
 	if err != nil {
-		return nil, fmt.Errorf("read candidate skill at %s: %w", skillPath, err)
+		return nil, err
 	}
-
 	// 1. Structural validation
 	valResult := skills.ValidateDir(candidateDir)
 	if !valResult.Valid {
@@ -52,8 +47,13 @@ func (e *Evaluator) EvaluateCandidate(ctx context.Context, skillName string) (*C
 		return nil, fmt.Errorf("load candidate skill: %w", err)
 	}
 
+	contentHash, violations, err := ScanCandidateFiles(candidateDir)
+	if err != nil {
+		return nil, err
+	}
 	report := &CandidateEvalReport{
 		SkillName:   parsedSkill.Frontmatter.Name,
+		ContentHash: contentHash,
 		EvaluatedAt: time.Now().UTC(),
 		Passed:      true,
 	}
@@ -133,7 +133,6 @@ func (e *Evaluator) EvaluateCandidate(ctx context.Context, skillName string) (*C
 	}
 
 	// 3. Safety checks
-	violations := ScanSafety(data)
 	if len(violations) > 0 {
 		report.SafetyPassed = false
 		report.SafetyViolations = violations
@@ -145,7 +144,7 @@ func (e *Evaluator) EvaluateCandidate(ctx context.Context, skillName string) (*C
 	// Save evaluation report
 	reportBytes, err := json.MarshalIndent(report, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(filepath.Join(candidateDir, "eval_report.json"), reportBytes, 0o600)
+		_ = writeCandidateMetadata(candidateDir, "eval_report.json", reportBytes)
 	}
 
 	return report, nil

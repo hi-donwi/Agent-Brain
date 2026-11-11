@@ -83,14 +83,18 @@ func (m *Manager) List() ([]SkillSummary, error) {
 	var list []SkillSummary
 
 	for _, src := range m.sources {
-		entries, err := os.ReadDir(src.Path)
+		root, err := filepath.EvalSymlinks(src.Path)
+		if err != nil {
+			continue
+		}
+		entries, err := os.ReadDir(root)
 		if err != nil {
 			// A source directory might not exist yet; ignore missing directories gracefully
 			continue
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 				continue
 			}
 			name := entry.Name()
@@ -98,9 +102,8 @@ func (m *Manager) List() ([]SkillSummary, error) {
 				continue
 			}
 
-			skillDir := filepath.Join(src.Path, name)
-			skillMD := filepath.Join(skillDir, "SKILL.md")
-			if _, err := os.Stat(skillMD); err != nil {
+			skillDir, err := resolveSkillDirectory(root, name)
+			if err != nil {
 				continue
 			}
 
@@ -128,12 +131,17 @@ func (m *Manager) GetSkill(name string) (*Skill, error) {
 	if cleanName == "" {
 		return nil, ErrSkillNotFound
 	}
+	if !nameRegex.MatchString(cleanName) {
+		return nil, ErrInvalidPath
+	}
 
 	for _, src := range m.sources {
-		skillDir := filepath.Join(src.Path, cleanName)
-		skillMD := filepath.Join(skillDir, "SKILL.md")
-		if _, err := os.Stat(skillMD); err == nil {
+		skillDir, err := resolveSkillDirectory(src.Path, cleanName)
+		if err == nil {
 			return LoadSkill(skillDir, src.Type)
+		}
+		if !isMissingSkillPath(err) && !errors.Is(err, ErrSkillNotFound) {
+			return nil, err
 		}
 	}
 
@@ -152,16 +160,40 @@ func (m *Manager) GetReference(skillName, refRelPath string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidPath, refRelPath)
 	}
 
-	refPath := filepath.Join(skill.Summary.Path, "references", cleanRef)
-	data, err := os.ReadFile(refPath)
+	data, err := readSkillFile(skill.Summary.Path, filepath.Join("references", cleanRef), maxSkillDocumentBytes)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if isMissingSkillPath(err) {
 			return "", fmt.Errorf("%w: %q in skill %q", ErrReferenceNotFound, cleanRef, skillName)
 		}
-		return "", fmt.Errorf("read reference %s: %w", refPath, err)
+		return "", fmt.Errorf("read reference: %w", err)
 	}
 
 	return string(data), nil
+}
+
+// RemoveUserSkill removes one validated direct child of the Brain user skill directory.
+func (m *Manager) RemoveUserSkill(name string) error {
+	if m.userDir == "" || m.userDir == "." {
+		return errors.New("user skill directory is not configured")
+	}
+	if !nameRegex.MatchString(name) {
+		return ErrInvalidPath
+	}
+	dir, err := resolveUserSkillDirectory(m.userDir, name)
+	if err != nil {
+		if isMissingSkillPath(err) {
+			return fmt.Errorf("%w: %q", ErrSkillNotFound, name)
+		}
+		return err
+	}
+	root, err := filepath.EvalSymlinks(m.userDir)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(dir) != filepath.Clean(root) {
+		return ErrInvalidPath
+	}
+	return os.RemoveAll(dir)
 }
 
 // AddSkill copies a valid skill from srcPath into the user's skill directory (~/.lokal/skills/<name>).

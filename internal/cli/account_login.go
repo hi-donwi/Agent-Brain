@@ -7,16 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
-	"time"
-	"unicode"
 
 	"github.com/hi-donwi/Agent-Brain/internal/oauthbridge"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
@@ -349,83 +345,9 @@ func checkAccount(ctx context.Context, a router.Account, root string, probe bool
 			a.Models = append([]string(nil), models...)
 		}
 	} else {
-		p, err := router.LookupProvider(a.Provider)
+		discovered, err := router.DiscoverModels(ctx, a)
 		if err != nil {
 			return a, err
-		}
-		endpoint := a.BaseURL
-		if endpoint == "" {
-			endpoint = p.BaseURL
-		}
-		if err := router.ValidateEndpoint(endpoint); err != nil {
-			return a, err
-		}
-		path := "/v1/models"
-		geminiDiscovery := a.Provider == router.ProviderGemini || (a.Supports(router.ProtocolGemini) && !a.Supports(router.ProtocolChat) && !a.Supports(router.ProtocolResponses) && !a.Supports(router.ProtocolMessages))
-		if geminiDiscovery {
-			path = "/v1beta/models"
-		}
-		if a.Provider == router.ProviderDeepSeek {
-			path = "/models"
-		}
-		if strings.HasSuffix(strings.TrimRight(endpoint, "/"), "/v1") {
-			path = strings.TrimPrefix(path, "/v1")
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(endpoint, "/")+path, nil)
-		if err != nil {
-			return a, err
-		}
-		key, err := router.ResolveCredential(a.APIKey)
-		if err != nil {
-			return a, err
-		}
-		if key != "" {
-			switch {
-			case (a.Provider == router.ProviderAnthropic || (a.Supports(router.ProtocolMessages) && !a.Supports(router.ProtocolChat))) && a.Auth != router.AuthOAuth:
-				req.Header.Set("x-api-key", key)
-				req.Header.Set("anthropic-version", "2023-06-01")
-			case geminiDiscovery && a.Auth != router.AuthOAuth:
-				req.Header.Set("x-goog-api-key", key)
-			default:
-				req.Header.Set("Authorization", "Bearer "+key)
-			}
-		}
-		client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		resp, err := client.Do(req)
-		if err != nil {
-			return a, fmt.Errorf("cannot reach provider model discovery endpoint")
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return a, fmt.Errorf("provider credential/model discovery returned HTTP %d", resp.StatusCode)
-		}
-		var data struct {
-			Data   []struct{ ID string }   `json:"data"`
-			Models []struct{ Name string } `json:"models"`
-		}
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
-			return a, fmt.Errorf("provider returned invalid model metadata")
-		}
-		var discovered []string
-		for _, item := range data.Data {
-			if item.ID != "" {
-				discovered = append(discovered, item.ID)
-			}
-		}
-		for _, item := range data.Models {
-			if item.Name != "" {
-				discovered = append(discovered, strings.TrimPrefix(item.Name, "models/"))
-			}
-		}
-		for _, id := range discovered {
-			if len(id) > 512 || strings.ContainsFunc(id, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
-				return a, fmt.Errorf("provider returned an invalid model ID")
-			}
-		}
-		sort.Strings(discovered)
-		discovered = slices.Compact(discovered)
-		if len(discovered) == 0 {
-			return a, fmt.Errorf("provider returned no available models for this account")
 		}
 		a.DiscoveredModels = discovered
 		if len(a.Models) == 0 {

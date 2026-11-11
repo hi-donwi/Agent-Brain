@@ -174,6 +174,36 @@ live account state when it can authenticate to that gateway and labels a
 configuration snapshot otherwise. Listings and HTTP account metadata omit keys,
 secret references, management credentials, and custom header values.
 
+Agent-Control Settings embeds Brain's origin-bound management console. It can inspect
+configured backends/models, select existing backends and installed hardware profiles,
+and explicitly pull/unload/remove catalog models on supported Ollama runtimes. It does not
+install or launch system services, and no management endpoint executes arbitrary CLI
+commands. See [ADR-0016](docs/adr/0016-narrow-brain-origin-management-console.md) and
+[ADR-0017](docs/adr/0017-typed-local-backend-and-model-management.md).
+
+The same console lists and reindexes Brain knowledge sources registered locally with
+`brain knowledge source add`, and searches their collections using the local Ollama
+embedding backend. The browser never submits or receives a filesystem root; registration
+and removal remain Brain CLI operations. See [ADR-0018](docs/adr/0018-configured-root-rag-management.md).
+
+The console can install a single validated/secret-scanned Brain-user `SKILL.md`, and lists,
+inspects, validates, and removes Brain-user skills. Project/configured skills, references/archive
+imports, and MCP process/tool execution remain scoped to the local CLI/stdio MCP client. See
+[ADR-0019](docs/adr/0019-user-skills-and-mcp-management-inventory.md) and
+[ADR-0023](docs/adr/0023-single-file-user-skill-import.md).
+
+Trace UI shows only aggregate statistics with Brain-keyed session aliases. The sole evaluation
+surface is a fixed synthetic local Ollama smoke test; raw traces, custom eval specs and model
+outputs are not sent to Agent-Control. See [ADR-0020](docs/adr/0020-safe-trace-inventory-and-local-smoke-evaluation.md).
+
+Forge inventory/evaluation/promotion uses opaque candidate aliases in Settings. Full candidate
+content/provenance review stays local (`brain skills review-candidate`); the UI can promote only
+reviewed, owned-only, safety-clean candidates with a fresh passing evaluation. Trace mining,
+drafting and hardening remain CLI-owned. See [ADR-0021](docs/adr/0021-unscoped-forge-candidate-management.md).
+
+Settings displays redacted Brain service installation and health status; OS service install/remove
+remains local CLI-owned. See [ADR-0022](docs/adr/0022-redacted-service-status-and-cli-owned-lifecycle.md).
+
 The credential command requires a configured `routing_profiles.agent-control` profile.
 It writes a profile-scoped token and revision manifest under the private runtime home;
 never copy `serve.token` into Agent-Control.

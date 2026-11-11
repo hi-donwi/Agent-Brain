@@ -46,6 +46,30 @@ Use canonical references such as `openai/work`. Short names are accepted only
 when unambiguous. Existing account IDs remain valid. Repeated provider/name
 creation fails, and names cannot contain filesystem traversal components.
 
+## Agent-Control management console
+
+Agent-Control Settings embeds the Brain-origin `/manage-ui/` console for configured
+Agent Brain endpoints. Issue the separate management credential on the Brain host:
+`brain router management-credential` writes an owner-only file and does not print
+the value. Transfer it directly to the Brain-origin page; do not enter it into
+Agent-Control. The gateway master token, profile inference tokens, and account-scoped
+tokens are not accepted for management.
+
+The console can add API-key/no-auth accounts, prepare isolated managed OAuth
+accounts, enable/disable/remove account bindings, set a default, edit validated
+routing profiles, test API/OAuth credentials, and refresh the model catalog. The
+test and refresh operations call authenticated model metadata endpoints only; they
+do not send inference or incur inference usage. Antigravity/Codex OAuth uses a
+bounded, cancellable Brain-managed login session. Native Claude Code/Codex/Cursor
+authentication remains in the official local client/Brain CLI because it may
+require a local interactive session.
+
+Provider credentials are typed only in the Brain-origin console and stored by
+Brain; they are write-only in the API. Remove account binding does not revoke the
+upstream provider credential. Changes are persisted atomically, and a running
+gateway must be restarted before it uses changed accounts or routing. Profile
+revisions must also be updated in the matching Agent-Control project egress policy.
+
 ## Native CLI connections
 
 Claude Code uses its documented `CLAUDE_CONFIG_DIR` mechanism. Codex uses a

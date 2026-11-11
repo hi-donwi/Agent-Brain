@@ -2,6 +2,7 @@ package rag_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -134,5 +135,128 @@ func TestIndexer_IncrementalAndPruning(t *testing.T) {
 	}
 	if askResp.Answer != "This is a grounded answer from fake model." {
 		t.Errorf("unexpected answer: %q", askResp.Answer)
+	}
+}
+
+func TestIndexerNeverStoresContentFromSymlinkOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := "synthetic-private-outside-root-content"
+	outside := filepath.Join(parent, "private.txt")
+	if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("inside root"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	s, err := store.Open(filepath.Join(parent, "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	indexer := rag.NewIndexer(s, &fakeRagAdapter{})
+	if _, err := indexer.IndexDirectory(context.Background(), root, "test-col", "test-model", nil); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := s.GetCollection(context.Background(), "test-col")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents, err := s.ListDocuments(context.Background(), collection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, document := range documents {
+		if document.Path == "link.txt" || document.Hash == store.HashContent(secret) {
+			t.Fatalf("outside file entered the index: %+v", document)
+		}
+	}
+	if len(documents) != 1 || documents[0].Path != "inside.txt" {
+		t.Fatalf("unexpected indexed documents: %+v", documents)
+	}
+}
+
+func TestIndexerAcquiresAndReleasesEmbeddingResidencyPerBatch(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("one line\ntwo lines\nthree lines"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "residency.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	indexer := rag.NewIndexer(db, &fakeRagAdapter{})
+	indexer.BatchSize = 1
+	acquired, released := 0, 0
+	indexer.AcquireEmbedding = func(_ context.Context, model string) (func(), error) {
+		if model != "test-model" {
+			t.Fatalf("residency acquired for unexpected embedding model %q", model)
+		}
+		acquired++
+		return func() { released++ }, nil
+	}
+	if _, err := indexer.IndexDirectory(context.Background(), root, "docs", "test-model", nil); err != nil {
+		t.Fatal(err)
+	}
+	if acquired == 0 || acquired != released {
+		t.Fatalf("embedding leases acquired=%d released=%d", acquired, released)
+	}
+}
+
+type blockingRagAdapter struct {
+	*fakeRagAdapter
+	started chan struct{}
+}
+
+func (a *blockingRagAdapter) Embed(ctx context.Context, _ backend.EmbedRequest) (*backend.EmbedResponse, error) {
+	select {
+	case a.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestIndexerCancellationDuringEmbeddingDoesNotCommitIncompleteDocument(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("content that must not be committed after cancel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "cancel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	adapter := &blockingRagAdapter{fakeRagAdapter: &fakeRagAdapter{}, started: make(chan struct{}, 1)}
+	indexer := rag.NewIndexer(db, adapter)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := indexer.IndexDirectory(ctx, root, "cancel", "test-model", nil)
+		result <- err
+	}()
+	select {
+	case <-adapter.started:
+	case <-time.After(time.Second):
+		t.Fatal("indexer did not reach embedding")
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("indexer cancellation returned %v", err)
+	}
+	collection, err := db.GetCollection(context.Background(), "cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents, err := db.ListDocuments(context.Background(), collection.ID)
+	if err != nil || len(documents) != 0 {
+		t.Fatalf("incomplete document was committed: docs=%+v err=%v", documents, err)
 	}
 }

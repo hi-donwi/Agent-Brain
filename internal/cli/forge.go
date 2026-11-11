@@ -44,10 +44,83 @@ baseline fixtures, and hardens their descriptions and procedural workflows.`,
 	}
 
 	cmd.AddCommand(newForgeMineCmd(deps))
+	cmd.AddCommand(newForgeCandidatesCmd(deps))
 	cmd.AddCommand(newForgeDraftCmd(deps))
 	cmd.AddCommand(newForgeEvalCmd(deps))
 	cmd.AddCommand(newForgeHardenCmd(deps))
 
+	return cmd
+}
+
+type forgeCandidateListItem struct {
+	ID              string `json:"id,omitempty"`
+	Name            string `json:"name"`
+	State           string `json:"state"`
+	Reviewed        bool   `json:"reviewed"`
+	ExternalContent bool   `json:"external_content_included"`
+	Evaluated       bool   `json:"evaluated"`
+	PromotionReady  bool   `json:"promotion_ready"`
+}
+
+func newForgeCandidatesCmd(deps ForgeDeps) *cobra.Command {
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "candidates",
+		Short: "List Brain-local Forge candidate gates",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			layout, err := deps.ResolveHome()
+			if err != nil {
+				return err
+			}
+			names, err := forge.CandidateNames(layout.Candidates)
+			if err != nil {
+				return err
+			}
+			master, _ := readGatewayMaster(layout.Token)
+			candidateAlias := func(name string) string {
+				if master == "" {
+					return ""
+				}
+				return forge.CandidateAlias(master, name)
+			}
+			items := make([]forgeCandidateListItem, 0, len(names))
+			for _, name := range names {
+				check, err := forge.InspectCandidate(layout.Candidates, name)
+				if err != nil {
+					items = append(items, forgeCandidateListItem{ID: candidateAlias(name), Name: name, State: "invalid"})
+					continue
+				}
+				state := "evaluation-required"
+				if !check.StructuralPassed || !check.SafetyPassed {
+					state = "safety-blocked"
+				} else if !check.Reviewed {
+					state = "review-required"
+				} else if check.ExternalContent {
+					state = "external-content-reviewed"
+				} else if check.PromotionReady {
+					state = "ready-to-promote"
+				}
+				items = append(items, forgeCandidateListItem{
+					ID: candidateAlias(name), Name: name, State: state,
+					Reviewed: check.Reviewed, ExternalContent: check.ExternalContent,
+					Evaluated: check.EvaluationFresh && check.EvaluationPassed, PromotionReady: check.PromotionReady,
+				})
+			}
+			if jsonOutput {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]any{"candidates": items})
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "ID\tNAME\tSTATE")
+			for _, item := range items {
+				fmt.Fprintf(w, "%s\t%s\t%s\n", item.ID, item.Name, item.State)
+			}
+			return w.Flush()
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output candidate gate summaries as JSON")
 	return cmd
 }
 

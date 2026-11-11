@@ -6,13 +6,16 @@ import (
 
 // Provenance tracks the origin and training sources of a candidate skill.
 type Provenance struct {
-	ClusterID      string    `yaml:"cluster_id" json:"cluster_id"`
-	CreatedAt      time.Time `yaml:"created_at" json:"created_at"`
-	SourceSessions []string  `yaml:"source_sessions" json:"source_sessions"`
-	SourceModels   []string  `yaml:"source_models" json:"source_models"`
-	ToolSequence   []string  `yaml:"tool_sequence,omitempty" json:"tool_sequence,omitempty"`
-	SafetyChecked  bool      `yaml:"safety_checked" json:"safety_checked"`
-	SafetyFlags    []string  `yaml:"safety_flags,omitempty" json:"safety_flags,omitempty"`
+	ClusterID               string     `yaml:"cluster_id" json:"cluster_id"`
+	CreatedAt               time.Time  `yaml:"created_at" json:"created_at"`
+	SourceSessions          []string   `yaml:"source_sessions" json:"source_sessions"`
+	SourceModels            []string   `yaml:"source_models" json:"source_models"`
+	ToolSequence            []string   `yaml:"tool_sequence,omitempty" json:"tool_sequence,omitempty"`
+	SafetyChecked           bool       `yaml:"safety_checked" json:"safety_checked"`
+	SafetyFlags             []string   `yaml:"safety_flags,omitempty" json:"safety_flags,omitempty"`
+	ExternalContentIncluded bool       `yaml:"external_content_included,omitempty" json:"external_content_included,omitempty"`
+	ReviewedAt              *time.Time `yaml:"reviewed_at,omitempty" json:"reviewed_at,omitempty"`
+	ReviewedContentHash     string     `yaml:"reviewed_content_hash,omitempty" json:"reviewed_content_hash,omitempty"`
 }
 
 // TraceCluster groups repeated successful sessions by tool signatures or intent.
@@ -54,6 +57,7 @@ type BenchmarkResult struct {
 // CandidateEvalReport summarizes the evaluation and verification of a candidate skill.
 type CandidateEvalReport struct {
 	SkillName        string            `json:"skill_name"`
+	ContentHash      string            `json:"content_hash"`
 	EvaluatedAt      time.Time         `json:"evaluated_at"`
 	Passed           bool              `json:"passed"`
 	Precision        float64           `json:"precision"`

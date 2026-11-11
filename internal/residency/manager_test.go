@@ -89,6 +89,48 @@ func TestManager_BasicAcquireAndRelease(t *testing.T) {
 	}
 }
 
+func TestManager_BlockModelDrainsActiveLeaseAndPreventsNewAcquires(t *testing.T) {
+	manager := residency.New(residency.Config{TotalBudget: 8 << 30, MaxConcurrency: 2, QueueTimeout: time.Second})
+	defer func() { _ = manager.Close() }()
+	activeRelease, err := manager.Acquire(context.Background(), "qwen2.5-coder:1.5b", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type blockResult struct {
+		release residency.ReleaseFunc
+		err     error
+	}
+	blocked := make(chan blockResult, 1)
+	go func() {
+		release, err := manager.BlockModel(context.Background(), "qwen2.5-coder:1.5b")
+		blocked <- blockResult{release: release, err: err}
+	}()
+	activeRelease()
+	result := <-blocked
+	if result.err != nil {
+		t.Fatalf("BlockModel failed after active lease drained: %v", result.err)
+	}
+	defer result.release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := manager.Acquire(ctx, "qwen2.5-coder:1.5b", 4096); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Acquire passed through a destructive model block: %v", err)
+	}
+	if err := manager.ForgetBlockedModel("qwen2.5-coder:1.5b"); err != nil {
+		t.Fatalf("ForgetBlockedModel failed under mutation lease: %v", err)
+	}
+	if len(manager.Stats().ResidentModels) != 0 {
+		t.Fatal("unloaded model remained in residency accounting")
+	}
+	result.release()
+	release, err := manager.Acquire(context.Background(), "qwen2.5-coder:1.5b", 4096)
+	if err != nil {
+		t.Fatalf("Acquire did not resume after model block release: %v", err)
+	}
+	release()
+}
+
 func TestManager_ConcurrencyQueueing(t *testing.T) {
 	mgr := residency.New(residency.Config{
 		TotalBudget:    8 * 1024 * 1024 * 1024,

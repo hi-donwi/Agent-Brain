@@ -20,6 +20,8 @@ type InferenceAuthConfig struct {
 	LocalEndpoint string
 }
 
+func isManagementRoute(path string) bool { return strings.HasPrefix(path, "/manage/v1/") }
+
 // APIError adheres to the OpenAI error envelope format.
 type APIError struct {
 	Error struct {
@@ -47,7 +49,7 @@ func AuthMiddleware(expectedToken string, inferenceConfigs ...InferenceAuthConfi
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/healthz" {
+			if r.URL.Path == "/healthz" || r.URL.Path == "/manage-ui/" || r.URL.Path == "/manage-ui/app.js" || r.URL.Path == "/manage-ui/style.css" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -82,6 +84,18 @@ func AuthMiddleware(expectedToken string, inferenceConfigs ...InferenceAuthConfi
 			token := strings.TrimSpace(parts[1])
 			if expectedToken == "" {
 				writeAPIError(w, 401, "gateway authentication is not configured", "invalid_request_error", "unauthorized")
+				return
+			}
+			if isManagementRoute(r.URL.Path) {
+				if !VerifyManagementToken(expectedToken, token) {
+					writeAPIError(w, http.StatusForbidden, "management routes require a management credential", "invalid_request_error", "management_scope")
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+			if VerifyManagementToken(expectedToken, token) {
+				writeAPIError(w, http.StatusForbidden, "management credentials are only valid for management routes", "invalid_request_error", "management_scope")
 				return
 			}
 			if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {

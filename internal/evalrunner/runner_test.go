@@ -111,6 +111,21 @@ func TestRunner_ModelInferenceAndOutputAssertions(t *testing.T) {
 	}
 }
 
+func TestRunnerMaxTokensLimitsGeneratedOutput(t *testing.T) {
+	var options *backend.ChatOptions
+	adapter := &mockEvalAdapter{chatFunc: func(_ context.Context, req backend.ChatRequest) (*backend.ChatResponse, error) {
+		options = req.Options
+		return &backend.ChatResponse{Message: backend.ChatMessage{Content: "READY"}}, nil
+	}}
+	spec := &TaskSpec{ID: "bounded", Prompt: "Say READY", MaxTokens: 32}
+	if _, err := NewRunner(adapter, "model").Run(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if options == nil || options.NumPredict != 32 || options.NumCtx != 0 {
+		t.Fatalf("MaxTokens must bound generated tokens, got options=%+v", options)
+	}
+}
+
 func TestRunner_FailingAssertion(t *testing.T) {
 	runner := NewRunner(nil, "default-model")
 
