@@ -33,6 +33,7 @@ type APIError struct {
 
 func writeAPIError(w http.ResponseWriter, status int, message, errType, code string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	var resp APIError
 	resp.Error.Message = message
