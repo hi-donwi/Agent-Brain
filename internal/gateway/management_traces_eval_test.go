@@ -93,6 +93,9 @@ func TestManagementEvaluationRunsOnlyFixedLocalSmokeSuite(t *testing.T) {
 			if req.Model != tag || len(req.Messages) != 1 || req.Messages[0].Content != "Reply with exactly this token: READY" {
 				t.Errorf("evaluation used a non-static request: %+v", req)
 			}
+			if req.Options == nil || req.Options.NumCtx != managementEvalMaxToken || req.Options.NumPredict != managementEvalMaxToken {
+				t.Errorf("evaluation did not enforce both context and output bounds: %+v", req.Options)
+			}
 			return &backend.ChatResponse{Model: tag, Message: backend.ChatMessage{Role: "assistant", Content: "READY"}, PromptEvalCount: 8, EvalCount: 1}, nil
 		},
 	}

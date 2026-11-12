@@ -205,7 +205,7 @@ func (s *Server) runManagementEvaluation(ctx context.Context, job *managementEva
 	s.updateManagementEval(job, func(current *managementEvalJob) { current.status = "running" })
 	spec := &evalrunner.TaskSpec{
 		ID: managementEvalSuiteID, Name: "Local model smoke test", Model: job.modelID,
-		TimeoutSeconds: 45, MaxTokens: managementEvalMaxToken,
+		TimeoutSeconds: 45, MaxTokens: managementEvalMaxToken, MaxContextTokens: managementEvalMaxToken,
 		Prompt:     "Reply with exactly this token: READY",
 		Assertions: evalrunner.SpecAssertions{OutputContains: []string{"READY"}},
 	}

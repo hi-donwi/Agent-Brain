@@ -21,16 +21,17 @@ type SpecAssertions struct {
 
 // TaskSpec specifies a bounded evaluation task.
 type TaskSpec struct {
-	ID             string            `yaml:"id" json:"id"`
-	Name           string            `yaml:"name" json:"name"`
-	Description    string            `yaml:"description,omitempty" json:"description,omitempty"`
-	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
-	TimeoutSeconds int               `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
-	MaxTokens      int               `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	Prompt         string            `yaml:"prompt" json:"prompt"`
-	AgentCommand   string            `yaml:"agent_command,omitempty" json:"agent_command,omitempty"`
-	SetupFiles     map[string]string `yaml:"setup_files,omitempty" json:"setup_files,omitempty"`
-	Assertions     SpecAssertions    `yaml:"assertions" json:"assertions"`
+	ID               string            `yaml:"id" json:"id"`
+	Name             string            `yaml:"name" json:"name"`
+	Description      string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Model            string            `yaml:"model,omitempty" json:"model,omitempty"`
+	TimeoutSeconds   int               `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+	MaxTokens        int               `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	MaxContextTokens int               `yaml:"max_context_tokens,omitempty" json:"max_context_tokens,omitempty"`
+	Prompt           string            `yaml:"prompt" json:"prompt"`
+	AgentCommand     string            `yaml:"agent_command,omitempty" json:"agent_command,omitempty"`
+	SetupFiles       map[string]string `yaml:"setup_files,omitempty" json:"setup_files,omitempty"`
+	Assertions       SpecAssertions    `yaml:"assertions" json:"assertions"`
 }
 
 // ParseTaskSpec unmarshals a TaskSpec from YAML or JSON bytes.
