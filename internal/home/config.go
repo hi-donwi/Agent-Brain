@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,14 +22,25 @@ type BackendConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 }
 
+// KnowledgeSource binds a Brain-owned collection to an operator-registered canonical root.
+// Root is stored only in the owner-readable runtime config and is never returned by management APIs.
+type KnowledgeSource struct {
+	ID             string `yaml:"id"`
+	Name           string `yaml:"name"`
+	Root           string `yaml:"root"`
+	Collection     string `yaml:"collection"`
+	EmbeddingModel string `yaml:"embedding_model,omitempty"`
+}
+
 // Config represents ~/.lokal/config.yaml.
 type Config struct {
-	Version      int                      `yaml:"version"`
-	Profile      string                   `yaml:"profile"`
-	Backends     map[string]BackendConfig `yaml:"backends"`
-	Aliases      map[string]string        `yaml:"aliases"`
-	SkillSources []string                 `yaml:"skill_sources,omitempty"`
-	Inference    InferenceConfig          `yaml:"inference,omitempty"`
+	Version          int                      `yaml:"version"`
+	Profile          string                   `yaml:"profile"`
+	Backends         map[string]BackendConfig `yaml:"backends"`
+	Aliases          map[string]string        `yaml:"aliases"`
+	SkillSources     []string                 `yaml:"skill_sources,omitempty"`
+	KnowledgeSources []KnowledgeSource        `yaml:"knowledge_sources,omitempty"`
+	Inference        InferenceConfig          `yaml:"inference,omitempty"`
 }
 
 // InferenceConfig bounds the local runtime independently of a model's advertised capacity.
@@ -83,6 +95,33 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("endpoint cannot be empty for backend %s", name)
 		}
 	}
+	if len(c.KnowledgeSources) > 128 {
+		return errors.New("at most 128 knowledge sources may be configured")
+	}
+	sourceIDs := make(map[string]bool, len(c.KnowledgeSources))
+	collections := make(map[string]bool, len(c.KnowledgeSources))
+	for _, source := range c.KnowledgeSources {
+		if !validKnowledgeIdentifier(source.ID) || !validKnowledgeIdentifier(source.Collection) {
+			return errors.New("knowledge source ID and collection must use lowercase letters, digits, '_' or '-'")
+		}
+		if strings.TrimSpace(source.Name) == "" || len(source.Name) > 128 || strings.ContainsFunc(source.Name, unicode.IsControl) {
+			return errors.New("knowledge source name must be 1-128 printable characters")
+		}
+		if source.Root == "" || !filepath.IsAbs(source.Root) || filepath.Clean(source.Root) != source.Root || filepath.Dir(source.Root) == source.Root {
+			return errors.New("knowledge source root must be an absolute clean path")
+		}
+		if strings.ContainsAny(source.EmbeddingModel, "\r\n\x00") || len(source.EmbeddingModel) > 256 {
+			return errors.New("knowledge source embedding model is invalid")
+		}
+		if sourceIDs[source.ID] {
+			return fmt.Errorf("duplicate knowledge source ID %q", source.ID)
+		}
+		if collections[source.Collection] {
+			return fmt.Errorf("duplicate knowledge collection %q", source.Collection)
+		}
+		sourceIDs[source.ID] = true
+		collections[source.Collection] = true
+	}
 	if len(c.Aliases) == 0 {
 		return errors.New("aliases cannot be empty")
 	}
@@ -90,6 +129,19 @@ func (c *Config) Validate() error {
 		return errors.New("chat alias must be configured")
 	}
 	return nil
+}
+
+func validKnowledgeIdentifier(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for i, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || (i > 0 && (char == '_' || char == '-')) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // PrimaryBackend returns the name and configuration of the first enabled backend.

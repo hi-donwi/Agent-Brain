@@ -2,6 +2,7 @@ package skills_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -238,6 +239,48 @@ description: Newly authored skill.
 	}
 	if found.Summary.Source != skills.SourceUser {
 		t.Errorf("expected source user, got %s", found.Summary.Source)
+	}
+}
+
+func TestManagerRemoveUserSkillOnlyRemovesSafeUserChild(t *testing.T) {
+	tmp := t.TempDir()
+	userDir := filepath.Join(tmp, "home", "skills")
+	projectDir := filepath.Join(tmp, "project")
+	userSkill := filepath.Join(userDir, "user-skill")
+	mustWriteFile(t, filepath.Join(userSkill, "SKILL.md"), `---
+name: user-skill
+description: A user skill for safe removal.
+---
+# Instructions
+`)
+	external := filepath.Join(tmp, "outside")
+	mustWriteFile(t, filepath.Join(external, "SKILL.md"), `---
+name: external-skill
+description: Must remain outside the Brain user skill root.
+---
+# Instructions
+`)
+	mgr := skills.NewManager(projectDir, userDir, nil)
+	if err := mgr.RemoveUserSkill("../outside"); !errors.Is(err, skills.ErrInvalidPath) {
+		t.Fatalf("traversal removal returned %v", err)
+	}
+	if err := os.Symlink(external, filepath.Join(userDir, "external-skill")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if err := mgr.RemoveUserSkill("external-skill"); !errors.Is(err, skills.ErrInvalidPath) {
+		t.Fatalf("symlink removal returned %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(external, "SKILL.md")); err != nil {
+		t.Fatalf("outside skill was removed: %v", err)
+	}
+	if err := mgr.RemoveUserSkill("user-skill"); err != nil {
+		t.Fatalf("remove user skill: %v", err)
+	}
+	if _, err := os.Stat(userSkill); !os.IsNotExist(err) {
+		t.Fatalf("user skill still exists after removal: %v", err)
+	}
+	if err := mgr.RemoveUserSkill("project-skill"); !errors.Is(err, skills.ErrSkillNotFound) {
+		t.Fatalf("removal outside user source returned %v", err)
 	}
 }
 

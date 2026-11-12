@@ -207,6 +207,55 @@ func TestConfig_NotFound(t *testing.T) {
 	}
 }
 
+func TestKnowledgeSourceConfigRoundTripsPrivately(t *testing.T) {
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "docs")
+	if err := os.Mkdir(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := home.DefaultConfig("tiny", map[string]string{"chat": "qwen-test"})
+	config.KnowledgeSources = []home.KnowledgeSource{{
+		ID: "workspace_docs", Name: "Workspace documents", Root: sourceRoot,
+		Collection: "workspace_docs", EmbeddingModel: "nomic-embed-text",
+	}}
+	path := filepath.Join(root, "config.yaml")
+	if err := home.SaveConfig(path, config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := home.LoadConfig(path)
+	if err != nil || len(loaded.KnowledgeSources) != 1 || loaded.KnowledgeSources[0] != config.KnowledgeSources[0] {
+		t.Fatalf("knowledge source failed config round trip: %#v err=%v", loaded.KnowledgeSources, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("config with private root path is not owner-only: info=%v err=%v", info, err)
+	}
+}
+
+func TestKnowledgeSourceConfigRejectsUnboundedOrAmbiguousEntries(t *testing.T) {
+	base := home.DefaultConfig("tiny", map[string]string{"chat": "qwen-test"})
+	for name, sources := range map[string][]home.KnowledgeSource{
+		"relative root": {{ID: "docs", Name: "Docs", Root: "docs", Collection: "docs"}},
+		"invalid id":    {{ID: "../docs", Name: "Docs", Root: "/tmp/docs", Collection: "docs"}},
+		"duplicate id": {
+			{ID: "docs", Name: "Docs A", Root: "/tmp/a", Collection: "docs_a"},
+			{ID: "docs", Name: "Docs B", Root: "/tmp/b", Collection: "docs_b"},
+		},
+		"duplicate collection": {
+			{ID: "docs_a", Name: "Docs A", Root: "/tmp/a", Collection: "shared"},
+			{ID: "docs_b", Name: "Docs B", Root: "/tmp/b", Collection: "shared"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := *base
+			config.KnowledgeSources = sources
+			if err := config.Validate(); err == nil {
+				t.Fatalf("invalid knowledge source config accepted: %+v", sources)
+			}
+		})
+	}
+}
+
 func TestConfig_PrimaryBackend(t *testing.T) {
 	cfg := &home.Config{
 		Version: 1,

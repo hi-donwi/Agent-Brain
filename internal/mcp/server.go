@@ -32,6 +32,14 @@ type Config struct {
 	SkillsMgr           *skills.Manager
 	Adapter             backend.Adapter
 	Aliases             map[string]string
+	SkipResources       bool // Used for metadata-only inventory without reading project files.
+}
+
+// ToolInfo is the public, read-only descriptor exposed by MCP inventory.
+type ToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReadOnly    bool   `json:"read_only"`
 }
 
 // toolHandler is the body of one tool: the call's arguments as a JSON object in, a result
@@ -50,6 +58,7 @@ type Server struct {
 	adapter             backend.Adapter
 	aliases             map[string]string
 	handlers            map[string]toolHandler
+	toolInfo            []ToolInfo
 }
 
 // NewServer registers read-only MCP tools and resources and builds an MCP server instance.
@@ -95,7 +104,9 @@ func NewServer(cfg Config) *Server {
 	s.agentDefinitionDirs = append([]string(nil), cfg.AgentDefinitionDirs...)
 	s.registerAgentTools()
 	s.registerTools()
-	s.registerResources()
+	if !cfg.SkipResources {
+		s.registerResources()
+	}
 	return s
 }
 
@@ -111,6 +122,11 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 // MCPServer returns the underlying MCP server handle.
 func (s *Server) MCPServer() *sdk.Server {
 	return s.mcpServer
+}
+
+// ToolCatalog returns the registered tool names/descriptions without starting the MCP process.
+func (s *Server) ToolCatalog() []ToolInfo {
+	return append([]ToolInfo(nil), s.toolInfo...)
 }
 
 // ServeStdio serves MCP over stdin and stdout. It blocks until the client closes stdin or
@@ -143,6 +159,7 @@ func (s *Server) addTool(tool *sdk.Tool, handler toolHandler) {
 		return handler(ctx, args)
 	})
 	s.handlers[tool.Name] = handler
+	s.toolInfo = append(s.toolInfo, ToolInfo{Name: tool.Name, Description: tool.Description, ReadOnly: true})
 }
 
 // decodeArguments reads tools/call arguments, which MCP defines as a JSON object. Absent

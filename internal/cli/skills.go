@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,7 @@ according to the open Agent Skills specification (SKILL.md) and progressive disc
 	cmd.AddCommand(newSkillsValidateCmd())
 	cmd.AddCommand(newSkillsAddCmd(deps))
 	cmd.AddCommand(newSkillsPromoteCmd(deps))
+	cmd.AddCommand(newSkillsReviewCandidateCmd(deps))
 	cmd.AddCommand(newSkillsRollbackCmd(deps))
 	cmd.AddCommand(newSkillsExportCmd(deps))
 
@@ -278,8 +280,6 @@ func resolveSkillsManager(deps SkillsDeps) (*skills.Manager, error) {
 }
 
 func newSkillsPromoteCmd(deps SkillsDeps) *cobra.Command {
-	var force bool
-
 	cmd := &cobra.Command{
 		Use:   "promote <candidate-name>",
 		Short: "Promote an evaluated candidate skill to user skills",
@@ -297,7 +297,7 @@ by content hash, and promotes a skill from ~/.lokal/candidates/ to ~/.lokal/skil
 			}
 
 			promoter := forge.NewPromoter(layout.Candidates, layout.Skills)
-			res, err := promoter.Promote(candidateName, force)
+			res, err := promoter.Promote(candidateName)
 			if err != nil {
 				return fmt.Errorf("promote skill: %w", err)
 			}
@@ -311,8 +311,73 @@ by content hash, and promotes a skill from ~/.lokal/candidates/ to ~/.lokal/skil
 		},
 	}
 
-	cmd.Flags().BoolVar(&force, "force", false, "force promotion without evaluation report check")
 	return cmd
+}
+
+func newSkillsReviewCandidateCmd(deps SkillsDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "review-candidate <candidate-name>",
+		Short: "Review provenance and mark a Brain Forge candidate for evaluation/promotion",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			layout, err := deps.ResolveHome()
+			if err != nil {
+				return err
+			}
+			if err := layout.Ensure(); err != nil {
+				return err
+			}
+			check, err := forge.InspectCandidate(layout.Candidates, name)
+			if err != nil || check.Provenance == nil {
+				return fmt.Errorf("candidate provenance is unavailable")
+			}
+			body, err := forge.ReadCandidateFile(layout.Candidates, name, "SKILL.md")
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Candidate: %s\nCluster: %s\nSource models: %s\nTool sequence: %s\nSource sessions:\n", name, check.Provenance.ClusterID, strings.Join(check.Provenance.SourceModels, ", "), strings.Join(check.Provenance.ToolSequence, " -> "))
+			for _, sessionID := range check.Provenance.SourceSessions {
+				fmt.Fprintf(out, "  - %s\n", sessionID)
+			}
+			fmt.Fprintln(out, "Existing evaluation:")
+			if check.Evaluation == nil {
+				fmt.Fprintln(out, "  not run")
+			} else {
+				fmt.Fprintf(out, "  passed=%t fresh=%t precision=%.1f%% recall=%.1f%% token_savings=%.1f%%\n", check.EvaluationPassed, check.EvaluationFresh, check.Evaluation.Precision*100, check.Evaluation.Recall*100, check.Evaluation.TokenSavingsPct)
+				for _, benchmark := range check.Evaluation.Benchmarks {
+					fmt.Fprintf(out, "  - %s (%s): passed=%t\n", benchmark.FixtureName, benchmark.FixtureType, benchmark.Passed)
+				}
+			}
+			fmt.Fprintln(out, "\nCandidate SKILL.md (untrusted trace-derived text):")
+			if _, err := out.Write(body); err != nil {
+				return err
+			}
+			if len(body) == 0 || body[len(body)-1] != '\n' {
+				fmt.Fprintln(out)
+			}
+			scanner := bufio.NewScanner(cmd.InOrStdin())
+			fmt.Fprint(out, "Does the source include external/unowned content? Enter yes or no: ")
+			if !scanner.Scan() {
+				return errors.New("provenance review requires an explicit source classification")
+			}
+			external := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			if external != "yes" && external != "no" {
+				return errors.New("source classification must be exactly yes or no")
+			}
+			fmt.Fprintf(out, "Type 'review %s' to record that you inspected the candidate and provenance: ", name)
+			if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "review "+name {
+				return errors.New("candidate review confirmation did not match")
+			}
+			review, err := forge.ReviewCandidate(layout.Candidates, name, external == "yes")
+			if err != nil {
+				return fmt.Errorf("record candidate review: %w", err)
+			}
+			fmt.Fprintf(out, "Review recorded for %s (external content included: %t, content hash: %s). Run 'brain forge eval %s' before promotion.\n", name, review.ExternalContent, review.ContentHash, name)
+			return nil
+		},
+	}
 }
 
 func newSkillsRollbackCmd(deps SkillsDeps) *cobra.Command {

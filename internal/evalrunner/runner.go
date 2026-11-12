@@ -126,9 +126,10 @@ func (r *Runner) Run(ctx context.Context, spec *TaskSpec) (*EvalResult, error) {
 				{Role: "user", Content: spec.Prompt},
 			},
 		}
-		if spec.MaxTokens > 0 {
+		if spec.MaxTokens > 0 || spec.MaxContextTokens > 0 {
 			chatReq.Options = &backend.ChatOptions{
-				NumCtx: spec.MaxTokens,
+				NumCtx:     spec.MaxContextTokens,
+				NumPredict: spec.MaxTokens,
 			}
 		}
 

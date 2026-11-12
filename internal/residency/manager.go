@@ -20,6 +20,10 @@ var (
 
 	// ErrManagerClosed is returned when operations are attempted on a closed residency manager.
 	ErrManagerClosed = errors.New("residency manager is closed")
+	// ErrModelMutationInProgress prevents concurrent unload/delete mutations for one model.
+	ErrModelMutationInProgress = errors.New("model mutation is already in progress")
+	// ErrModelNotBlocked rejects residency accounting changes outside a mutation lease.
+	ErrModelNotBlocked = errors.New("model is not held for mutation")
 )
 
 // ReleaseFunc releases a model's active request concurrency slot and updates usage timestamps.
@@ -60,6 +64,7 @@ type Manager struct {
 	cfg            Config
 	mu             sync.Mutex
 	resident       map[string]*ResidentModel
+	blockedModels  map[string]bool
 	activeRequests int
 	queuedRequests int
 	usedMemory     uint64
@@ -83,9 +88,10 @@ func New(cfg Config) *Manager {
 	}
 
 	return &Manager{
-		cfg:      cfg,
-		resident: make(map[string]*ResidentModel),
-		notifyCh: make(chan struct{}),
+		cfg:           cfg,
+		resident:      make(map[string]*ResidentModel),
+		blockedModels: make(map[string]bool),
+		notifyCh:      make(chan struct{}),
 	}
 }
 
@@ -228,8 +234,90 @@ func (m *Manager) Acquire(ctx context.Context, modelTag string, numCtx int) (Rel
 	}
 }
 
+// BlockModel prevents new requests from acquiring a model while a destructive
+// operation runs and waits until current leases have drained. The returned release
+// function must always be called to resume queued requests.
+func (m *Manager) BlockModel(ctx context.Context, modelTag string) (ReleaseFunc, error) {
+	if modelTag == "" {
+		return nil, errors.New("model tag is required")
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, ErrManagerClosed
+	}
+	if m.blockedModels[modelTag] {
+		m.mu.Unlock()
+		return nil, ErrModelMutationInProgress
+	}
+	m.blockedModels[modelTag] = true
+	m.notifyWaiters()
+	m.mu.Unlock()
+
+	var once sync.Once
+	releaseBlock := func() {
+		once.Do(func() {
+			m.mu.Lock()
+			delete(m.blockedModels, modelTag)
+			if !m.closed {
+				m.notifyWaiters()
+			}
+			m.mu.Unlock()
+		})
+	}
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			releaseBlock()
+			return nil, ErrManagerClosed
+		}
+		resident := m.resident[modelTag]
+		if resident == nil || resident.ActiveRequests == 0 {
+			m.mu.Unlock()
+			return releaseBlock, nil
+		}
+		notify := m.notifyCh
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			releaseBlock()
+			return nil, ctx.Err()
+		case <-notify:
+		}
+	}
+}
+
+// ForgetBlockedModel removes a successfully unloaded/deleted model from residency
+// accounting. Call only while holding the BlockModel lease for the same tag.
+func (m *Manager) ForgetBlockedModel(modelTag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.blockedModels[modelTag] {
+		return ErrModelNotBlocked
+	}
+	resident := m.resident[modelTag]
+	if resident == nil {
+		return nil
+	}
+	if resident.ActiveRequests != 0 {
+		return ErrModelMutationInProgress
+	}
+	delete(m.resident, modelTag)
+	if m.usedMemory >= resident.MemoryBytes {
+		m.usedMemory -= resident.MemoryBytes
+	} else {
+		m.usedMemory = 0
+	}
+	m.notifyWaiters()
+	return nil
+}
+
 // evaluateAcquire inspects concurrency limits and memory availability under m.mu.
 func (m *Manager) evaluateAcquire(modelTag string, memNeeded uint64) (bool, bool, []ResidentModel) {
+	if m.blockedModels[modelTag] {
+		return false, false, nil
+	}
 	// 1. Check global concurrency limit
 	if m.activeRequests >= m.cfg.MaxConcurrency {
 		return false, false, nil
@@ -284,6 +372,11 @@ func (m *Manager) evaluateAcquire(modelTag string, memNeeded uint64) (bool, bool
 	}
 
 	return true, true, evictList
+}
+
+func (m *Manager) notifyWaiters() {
+	close(m.notifyCh)
+	m.notifyCh = make(chan struct{})
 }
 
 // Stats returns an instantaneous snapshot of residency and concurrency metrics.

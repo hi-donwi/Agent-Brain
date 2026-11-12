@@ -13,6 +13,14 @@ type Collection struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// CollectionSummary reports aggregate metadata without returning document paths or content.
+type CollectionSummary struct {
+	Collection Collection `json:"collection"`
+	Documents  int        `json:"documents"`
+	Chunks     int        `json:"chunks"`
+	Bytes      int64      `json:"bytes"`
+}
+
 // Document represents an indexed file within a collection.
 type Document struct {
 	ID           string    `json:"id"`

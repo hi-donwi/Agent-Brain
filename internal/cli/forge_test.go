@@ -128,12 +128,25 @@ func TestForgeCLI_FullCycle(t *testing.T) {
 		t.Errorf("unexpected harden output: %s", buf.String())
 	}
 
-	// 7. Skills promote
+	// 7. Review candidate provenance before promotion.
 	skillsDeps := SkillsDeps{
 		ResolveHome: func() (home.Layout, error) {
 			return home.Resolve(func(string) string { return tempHome }, nil)
 		},
 	}
+	buf.Reset()
+	reviewCmd := newSkillsReviewCandidateCmd(skillsDeps)
+	reviewCmd.SetOut(&buf)
+	reviewCmd.SetIn(strings.NewReader("no\nreview bench-test-skill\n"))
+	reviewCmd.SetArgs([]string{"bench-test-skill"})
+	if err := reviewCmd.Execute(); err != nil {
+		t.Fatalf("skills review-candidate failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Review recorded for bench-test-skill") {
+		t.Errorf("unexpected review output: %s", buf.String())
+	}
+
+	// 8. Skills promote
 	buf.Reset()
 	promoteCmd := newSkillsPromoteCmd(skillsDeps)
 	promoteCmd.SetOut(&buf)
@@ -145,7 +158,7 @@ func TestForgeCLI_FullCycle(t *testing.T) {
 		t.Errorf("unexpected promote output: %s", buf.String())
 	}
 
-	// 8. Skills export
+	// 9. Skills export
 	buf.Reset()
 	exportDir := filepath.Join(tempHome, "exported")
 	exportCmd := newSkillsExportCmd(skillsDeps)

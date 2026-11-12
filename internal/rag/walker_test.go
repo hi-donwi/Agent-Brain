@@ -1,6 +1,8 @@
 package rag_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,5 +51,40 @@ func TestWalker_FilterAndIgnore(t *testing.T) {
 	isTxtBin, err := rag.IsBinaryFile(txtFile)
 	if err != nil || isTxtBin {
 		t.Errorf("expected hello.txt to be text, got %v (%v)", isTxtBin, err)
+	}
+}
+
+func TestWalkerSkipsSymlinkFilesThatCouldEscapeTheRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "private.txt")
+	if err := os.WriteFile(outside, []byte("must not be indexed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "linked.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := rag.WalkFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "inside.txt" {
+		t.Fatalf("walk included a symlink or skipped an in-root file: %v", files)
+	}
+}
+
+func TestWalkFilesContextStopsWhenCancelled(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rag.WalkFilesContext(ctx, root); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled walk returned %v", err)
 	}
 }

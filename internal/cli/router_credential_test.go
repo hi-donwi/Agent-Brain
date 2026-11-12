@@ -103,3 +103,39 @@ func TestRouterCredentialRefusesOverwrite(t *testing.T) {
 		t.Fatal("existing credential file was modified")
 	}
 }
+
+func TestRouterManagementCredentialWritesOwnerOnlyAndNeverPrintsToken(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(home.EnvVar, root)
+	master := strings.Repeat("c", 64)
+	if err := os.WriteFile(filepath.Join(root, "serve.token"), []byte(master+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(root, "management.token")
+	cmd := newRouterCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"management-credential", "--output", outputPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("credential file mode is %o, want 600", info.Mode().Perm())
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimSpace(string(data))
+	if !gateway.VerifyManagementToken(master, token) {
+		t.Fatal("stored management credential is invalid")
+	}
+	if strings.Contains(stdout.String()+stderr.String(), token) || strings.Contains(stdout.String()+stderr.String(), master) {
+		t.Fatal("credential or gateway master was printed")
+	}
+}

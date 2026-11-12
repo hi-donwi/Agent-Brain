@@ -77,24 +77,23 @@ func ParseSkillMD(content []byte) (*Frontmatter, string, error) {
 
 // LoadSkill reads a skill directory and parses its SKILL.md and references.
 func LoadSkill(dir string, source SourceType) (*Skill, error) {
-	skillMDPath := filepath.Join(dir, "SKILL.md")
-	content, err := os.ReadFile(skillMDPath)
+	content, err := readSkillFile(dir, "SKILL.md", maxSkillDocumentBytes)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", skillMDPath, err)
+		return nil, fmt.Errorf("read skill metadata: %w", err)
 	}
 
 	fm, body, err := ParseSkillMD(content)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", skillMDPath, err)
+		return nil, fmt.Errorf("parse skill metadata: %w", err)
 	}
 
 	summary := extractSummary(fm, dir, source)
 
 	var refs []string
 	refsDir := filepath.Join(dir, "references")
-	if fi, err := os.Stat(refsDir); err == nil && fi.IsDir() {
+	if fi, err := os.Lstat(refsDir); err == nil && fi.IsDir() && fi.Mode()&os.ModeSymlink == 0 {
 		_ = filepath.Walk(refsDir, func(path string, info os.FileInfo, walkErr error) error {
-			if walkErr != nil || info.IsDir() {
+			if walkErr != nil || info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 				return nil
 			}
 			rel, relErr := filepath.Rel(refsDir, path)
@@ -115,15 +114,14 @@ func LoadSkill(dir string, source SourceType) (*Skill, error) {
 
 // LoadSkillSummary parses only the summary metadata without loading the entire body.
 func LoadSkillSummary(dir string, source SourceType) (*SkillSummary, error) {
-	skillMDPath := filepath.Join(dir, "SKILL.md")
-	content, err := os.ReadFile(skillMDPath)
+	content, err := readSkillFile(dir, "SKILL.md", maxSkillDocumentBytes)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", skillMDPath, err)
+		return nil, fmt.Errorf("read skill metadata: %w", err)
 	}
 
 	fm, _, err := ParseSkillMD(content)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", skillMDPath, err)
+		return nil, fmt.Errorf("parse skill metadata: %w", err)
 	}
 
 	summary := extractSummary(fm, dir, source)

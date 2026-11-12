@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrInvalidSessionID = errors.New("invalid trace session ID")
+
 // Store manages reading and writing trace records to JSONL files.
 type Store struct {
 	tracesDir string
@@ -39,6 +41,9 @@ func (s *Store) WriteRecord(rec *Record) error {
 	}
 	if rec.SessionID == "" {
 		rec.SessionID = "default"
+	}
+	if !validSessionID(rec.SessionID) {
+		return ErrInvalidSessionID
 	}
 	if rec.TurnID == "" {
 		rec.TurnID = uuid.NewString()
@@ -76,15 +81,29 @@ func (s *Store) WriteRecord(rec *Record) error {
 
 // ReadSession reads all trace records for a session ID.
 func (s *Store) ReadSession(sessionID string) ([]Record, error) {
+	if !validSessionID(sessionID) {
+		return nil, ErrInvalidSessionID
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	sessionFile := filepath.Join(s.tracesDir, fmt.Sprintf("%s.jsonl", strings.TrimSuffix(sessionID, ".jsonl")))
+	sessionFile := filepath.Join(s.tracesDir, fmt.Sprintf("%s.jsonl", sessionID))
+	info, err := os.Lstat(sessionFile)
+	if err != nil {
+		return nil, fmt.Errorf("read trace session %s: %w", sessionID, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, ErrInvalidSessionID
+	}
 	f, err := os.Open(sessionFile)
 	if err != nil {
 		return nil, fmt.Errorf("read trace session %s: %w", sessionID, err)
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, ErrInvalidSessionID
+	}
 
 	var records []Record
 	scanner := bufio.NewScanner(f)
@@ -127,12 +146,19 @@ func (s *Store) ListSessions() ([]SessionSummary, error) {
 	var summaries []SessionSummary
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
 
 		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if !validSessionID(sessionID) {
+			continue
+		}
 		filePath := filepath.Join(s.tracesDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
 
 		sum, err := summarizeSessionFile(filePath, sessionID)
 		if err == nil && sum.RecordCount > 0 {
@@ -145,6 +171,22 @@ func (s *Store) ListSessions() ([]SessionSummary, error) {
 	})
 
 	return summaries, nil
+}
+
+func validSessionID(id string) bool {
+	if len(id) == 0 || len(id) > 128 || id == "." || id == ".." {
+		return false
+	}
+	for i, char := range id {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		if i > 0 && (char == '_' || char == '-' || char == '.') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func summarizeSessionFile(path, sessionID string) (*SessionSummary, error) {

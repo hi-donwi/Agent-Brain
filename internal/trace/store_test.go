@@ -114,6 +114,40 @@ func TestStore_ListSessions(t *testing.T) {
 	}
 }
 
+func TestTraceStoreRejectsPathLikeSessionIDs(t *testing.T) {
+	root := t.TempDir()
+	tracesDir := filepath.Join(root, "traces")
+	store := NewStore(tracesDir)
+	if err := store.WriteRecord(&Record{SessionID: "../escape", TurnID: "turn"}); err == nil {
+		t.Fatal("path-like session ID was written")
+	}
+	if _, err := os.Stat(filepath.Join(root, "escape.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("path-like session escaped trace directory: %v", err)
+	}
+	if _, err := store.ReadSession("../escape"); err == nil {
+		t.Fatal("path-like session ID was read")
+	}
+}
+
+func TestTraceStoreListSkipsSymlinkedSessionFiles(t *testing.T) {
+	root := t.TempDir()
+	tracesDir := filepath.Join(root, "traces")
+	if err := os.MkdirAll(tracesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.jsonl")
+	if err := os.WriteFile(outside, []byte(`{"version":1,"session_id":"outside","turn_id":"one","timestamp":"2026-01-01T00:00:00Z","model":"test","duration_ms":1,"prompt_tokens":2,"eval_tokens":3}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(tracesDir, "outside.jsonl")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	summaries, err := NewStore(tracesDir).ListSessions()
+	if err != nil || len(summaries) != 0 {
+		t.Fatalf("symlinked trace was not skipped: summaries=%+v err=%v", summaries, err)
+	}
+}
+
 func TestStore_ConcurrentWrites(t *testing.T) {
 	tempDir := t.TempDir()
 	store := NewStore(tempDir)

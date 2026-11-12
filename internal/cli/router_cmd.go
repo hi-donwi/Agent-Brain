@@ -26,6 +26,7 @@ multi-account status, failover cooldowns, and tool result token compression.`,
 	cmd.AddCommand(newRouterStatusCmd())
 	cmd.AddCommand(newRouterOptimizeCmd())
 	cmd.AddCommand(newRouterCredentialCmd())
+	cmd.AddCommand(newRouterManagementCredentialCmd())
 	cmd.AddCommand(&cobra.Command{Use: "strategy <priority|round-robin|weighted>", Short: "Choose the account-pool strategy", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if args[0] != "priority" && args[0] != "round-robin" && args[0] != "weighted" {
 			return fmt.Errorf("strategy must be priority, round-robin, or weighted")

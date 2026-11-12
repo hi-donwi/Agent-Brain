@@ -1,9 +1,7 @@
 package forge
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -84,15 +82,11 @@ type PromotionResult struct {
 }
 
 // Promote promotes a candidate skill into the active skills directory.
-func (p *Promoter) Promote(candidateName string, force bool) (*PromotionResult, error) {
-	candidateDir := filepath.Join(p.CandidatesDir, candidateName)
-	skillPath := filepath.Join(candidateDir, "SKILL.md")
-
-	data, err := os.ReadFile(skillPath)
+func (p *Promoter) Promote(candidateName string) (*PromotionResult, error) {
+	candidateDir, err := CandidateDirectory(p.CandidatesDir, candidateName)
 	if err != nil {
-		return nil, fmt.Errorf("read candidate skill %s: %w", skillPath, err)
+		return nil, err
 	}
-
 	// 1. Structural validation
 	valResult := skills.ValidateDir(candidateDir)
 	if !valResult.Valid {
@@ -100,45 +94,72 @@ func (p *Promoter) Promote(candidateName string, force bool) (*PromotionResult, 
 	}
 
 	// 2. Safety scan
-	violations := ScanSafety(data)
+	candidateHash, violations, err := ScanCandidateFiles(candidateDir)
+	if err != nil {
+		return nil, err
+	}
 	if len(violations) > 0 {
 		return nil, fmt.Errorf("safety check failed with violations: %s", strings.Join(violations, ", "))
 	}
 
-	// 3. Eval check unless forced
-	evalReportPath := filepath.Join(candidateDir, "eval_report.json")
-	if !force {
-		evalData, err := os.ReadFile(evalReportPath)
-		if err != nil {
-			return nil, errors.New("candidate has not been evaluated yet; run 'lokal forge eval' first or use --force")
-		}
-		var rep CandidateEvalReport
-		if err := yaml.Unmarshal(evalData, &rep); err == nil && !rep.Passed {
-			return nil, errors.New("candidate evaluation report indicates failures; resolve before promoting")
-		}
+	// 3. Require provenance review and a current evaluation report.
+	provenanceData, err := skills.ReadSafeSkillFile(candidateDir, "provenance.yaml", maxCandidateFileBytes)
+	if err != nil {
+		return nil, ErrCandidateNotReviewed
+	}
+	var provenance Provenance
+	if err := yaml.Unmarshal(provenanceData, &provenance); err != nil || !provenance.SafetyChecked || provenance.ReviewedAt == nil || provenance.ReviewedContentHash != candidateHash || len(provenance.SourceSessions) == 0 {
+		return nil, ErrCandidateNotReviewed
+	}
+	evalData, err := skills.ReadSafeSkillFile(candidateDir, "eval_report.json", maxCandidateFileBytes)
+	if err != nil {
+		return nil, ErrCandidateNotEvaluated
+	}
+	var rep CandidateEvalReport
+	if err := json.Unmarshal(evalData, &rep); err != nil || !rep.Passed || !rep.SafetyPassed || rep.ContentHash != candidateHash || !hasRequiredFixtures(rep.Benchmarks) {
+		return nil, ErrCandidateNotEvaluated
 	}
 
 	// 4. Compute content hash
-	hashBytes := sha256.Sum256(data)
-	contentHash := hex.EncodeToString(hashBytes[:])[:12]
+	contentHash := candidateHash[:12]
 
-	targetDir := filepath.Join(p.SkillsDir, candidateName)
+	skillsRoot, err := ensureSkillsDirectory(p.SkillsDir)
+	if err != nil {
+		return nil, err
+	}
+	targetDir := filepath.Join(skillsRoot, candidateName)
 	var backupPath string
 
 	// 5. Backup existing version if present
-	if _, err := os.Stat(targetDir); err == nil {
-		historyDir := filepath.Join(p.SkillsDir, ".history")
-		_ = os.MkdirAll(historyDir, 0o700)
-		backupPath = filepath.Join(historyDir, fmt.Sprintf("%s.%s.bak", candidateName, contentHash))
-		_ = copyDir(targetDir, backupPath)
+	if targetInfo, err := os.Lstat(targetDir); err == nil {
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.IsDir() {
+			return nil, ErrInvalidCandidate
+		}
+		historyDir := filepath.Join(skillsRoot, ".history")
+		if err := ensureSafeDirectory(skillsRoot, historyDir); err != nil {
+			return nil, err
+		}
+		backupName := fmt.Sprintf("%s.%s.bak", candidateName, contentHash)
+		backupPath = filepath.Join(historyDir, backupName)
+		if _, err := os.Lstat(backupPath); err == nil {
+			backupPath = filepath.Join(historyDir, fmt.Sprintf("%s.%s.%d.bak", candidateName, contentHash, time.Now().UTC().UnixNano()))
+		}
+		if err := copyDir(targetDir, backupPath); err != nil {
+			return nil, fmt.Errorf("backup existing Brain skill: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
 	}
 
 	// 6. Copy candidate to target
-	if err := os.MkdirAll(targetDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create target skill dir %s: %w", targetDir, err)
+	if err := os.RemoveAll(targetDir); err != nil {
+		return nil, fmt.Errorf("replace target Brain skill: %w", err)
 	}
 
 	if err := copyDir(candidateDir, targetDir); err != nil {
+		if backupPath != "" {
+			_ = copyDir(backupPath, targetDir)
+		}
 		return nil, fmt.Errorf("copy skill to %s: %w", targetDir, err)
 	}
 
@@ -151,8 +172,60 @@ func (p *Promoter) Promote(candidateName string, force bool) (*PromotionResult, 
 	}, nil
 }
 
+func ensureSkillsDirectory(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.IsDir() {
+		return "", ErrInvalidCandidate
+	}
+	return filepath.Clean(real), nil
+}
+
+func ensureSafeDirectory(root, path string) error {
+	if !candidatePathWithin(root, path) {
+		return ErrInvalidCandidate
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ErrInvalidCandidate
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Mkdir(path, 0o700)
+}
+
+func hasRequiredFixtures(results []BenchmarkResult) bool {
+	required := map[string]bool{"direct": false, "paraphrase": false, "near_miss": false, "adversarial": false}
+	for _, result := range results {
+		if _, ok := required[result.FixtureType]; ok && result.Passed {
+			required[result.FixtureType] = true
+		}
+	}
+	for _, passed := range required {
+		if !passed {
+			return false
+		}
+	}
+	return true
+}
+
 // Rollback restores the most recent backup of a skill.
 func (p *Promoter) Rollback(skillName string) (string, error) {
+	if !validCandidateName(skillName) {
+		return "", ErrInvalidCandidate
+	}
 	historyDir := filepath.Join(p.SkillsDir, ".history")
 	entries, err := os.ReadDir(historyDir)
 	if err != nil {
@@ -185,6 +258,9 @@ func (p *Promoter) Rollback(skillName string) (string, error) {
 
 // Export packages a skill into a standalone directory formatted for Agent-Skills repository.
 func (p *Promoter) Export(skillName, outDir string) (string, error) {
+	if !validCandidateName(skillName) {
+		return "", ErrInvalidCandidate
+	}
 	sourceDir := filepath.Join(p.SkillsDir, skillName)
 	if _, err := os.Stat(sourceDir); err != nil {
 		sourceDir = filepath.Join(p.CandidatesDir, skillName)
@@ -209,6 +285,17 @@ func (p *Promoter) Export(skillName, outDir string) (string, error) {
 }
 
 func copyDir(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return ErrInvalidCandidate
+	}
+	if info, err := os.Lstat(dst); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ErrInvalidCandidate
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
@@ -219,6 +306,12 @@ func copyDir(src, dst string) error {
 	}
 
 	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return ErrInvalidCandidate
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return ErrInvalidCandidate
+		}
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 
@@ -237,11 +330,19 @@ func copyDir(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrInvalidCandidate
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	opened, err := in.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return ErrInvalidCandidate
+	}
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {

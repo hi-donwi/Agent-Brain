@@ -293,3 +293,23 @@ func TestMCPErrorHandling(t *testing.T) {
 		t.Errorf("expected tool result error for non-existent skill")
 	}
 }
+
+func TestToolCatalogExposesOnlyReadOnlyMetadata(t *testing.T) {
+	s := localmcp.NewServer(localmcp.Config{RootDir: t.TempDir(), SkipResources: true})
+	tools := s.ToolCatalog()
+	if len(tools) == 0 {
+		t.Fatal("tool inventory is empty")
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		if tool.Name == "" || tool.Description == "" || !tool.ReadOnly {
+			t.Fatalf("tool inventory is incomplete or not marked read-only: %+v", tool)
+		}
+		seen[tool.Name] = true
+	}
+	for _, name := range []string{"search_knowledge", "list_skills", "get_skill", "list_models", "search_code"} {
+		if !seen[name] {
+			t.Errorf("tool inventory omitted %s", name)
+		}
+	}
+}

@@ -3,7 +3,6 @@ package rag
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -26,9 +25,10 @@ type IndexStats struct {
 
 // Indexer coordinates walking files, chunking, embedding, and storage.
 type Indexer struct {
-	Store     *store.Store
-	Adapter   backend.Adapter
-	BatchSize int
+	Store            *store.Store
+	Adapter          backend.Adapter
+	BatchSize        int
+	AcquireEmbedding func(context.Context, string) (func(), error)
 }
 
 // NewIndexer creates an Indexer instance with sensible defaults.
@@ -43,6 +43,14 @@ func NewIndexer(s *store.Store, adapter backend.Adapter) *Indexer {
 // IndexDirectory indexes all text documents under rootPath into the specified collection.
 func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName, embedModel string, onProgress func(relPath string, chunkCount int)) (*IndexStats, error) {
 	start := time.Now()
+	rootAbs, err := filepath.Abs(filepath.Clean(rootPath))
+	if err != nil {
+		return nil, fmt.Errorf("resolve index root: %w", err)
+	}
+	rootPath, err = filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve index root: %w", err)
+	}
 	rootPath = filepath.Clean(rootPath)
 
 	// 1. Ensure collection exists
@@ -65,7 +73,7 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 	}
 
 	// 2. Walk local files
-	files, err := WalkFiles(rootPath)
+	files, err := WalkFilesContext(ctx, rootPath)
 	if err != nil {
 		return nil, fmt.Errorf("scan files in %s: %w", rootPath, err)
 	}
@@ -91,10 +99,11 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 
 	// 3. Process discovered files
 	for _, relPath := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		seenPaths[relPath] = true
-		fullPath := filepath.Join(rootPath, relPath)
-
-		contentBytes, err := os.ReadFile(fullPath)
+		contentBytes, err := ReadRootedFile(rootPath, relPath)
 		if err != nil {
 			continue
 		}
@@ -131,6 +140,9 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 		// Generate embeddings for chunk texts in batches
 		var chunks []store.Chunk
 		for i := 0; i < len(drafts); i += idx.BatchSize {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			end := i + idx.BatchSize
 			if end > len(drafts) {
 				end = len(drafts)
@@ -143,16 +155,37 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 			}
 
 			var batchEmbeddings [][]float32
+			var embeddingErr error
 			if idx.Adapter != nil {
-				truncate := false
-				resp, err := idx.Adapter.Embed(ctx, backend.EmbedRequest{
-					Model:    col.Model,
-					Input:    batchTexts,
-					Truncate: &truncate,
-				})
-				if err == nil && resp != nil {
-					batchEmbeddings = resp.Embeddings
+				var release func()
+				if idx.AcquireEmbedding != nil {
+					release, err = idx.AcquireEmbedding(ctx, col.Model)
+					if err != nil {
+						return nil, fmt.Errorf("acquire embedding model residency: %w", err)
+					}
 				}
+				func() {
+					if release != nil {
+						defer release()
+					}
+					truncate := false
+					resp, embedErr := idx.Adapter.Embed(ctx, backend.EmbedRequest{
+						Model:    col.Model,
+						Input:    batchTexts,
+						Truncate: &truncate,
+					})
+					if embedErr == nil && resp != nil {
+						batchEmbeddings = resp.Embeddings
+					} else if ctx.Err() != nil {
+						embeddingErr = ctx.Err()
+					}
+				}()
+			}
+			if embeddingErr != nil {
+				return nil, embeddingErr
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 
 			for bIdx, d := range batchDrafts {
@@ -175,6 +208,9 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 		}
 
 		// Atomic store update: upsert doc first for foreign key constraint, then replace chunks
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := idx.Store.UpsertDocument(ctx, doc); err != nil {
 			return nil, fmt.Errorf("upsert document %s: %w", relPath, err)
 		}
@@ -195,6 +231,9 @@ func (idx *Indexer) IndexDirectory(ctx context.Context, rootPath, collectionName
 
 	// 4. Prune removed files
 	for existingPath := range existingMap {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !seenPaths[existingPath] {
 			if err := idx.Store.DeleteDocument(ctx, col.ID, existingPath); err == nil {
 				stats.FilesPruned++

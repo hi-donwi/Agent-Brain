@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
@@ -20,6 +21,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/hw"
 	"github.com/hi-donwi/Agent-Brain/internal/residency"
 	"github.com/hi-donwi/Agent-Brain/internal/router"
+	"github.com/hi-donwi/Agent-Brain/internal/service"
 	"github.com/hi-donwi/Agent-Brain/internal/trace"
 )
 
@@ -28,28 +30,48 @@ const DefaultPort = 52140
 
 // ServerConfig configures the gateway loopback HTTP server.
 type ServerConfig struct {
-	Addr            string
-	Token           string
-	AllowedHosts    []string
-	Adapter         backend.Adapter
-	Catalog         *catalog.Catalog
-	UserConfig      *home.Config
-	Residency       *residency.Manager
-	TraceStore      *trace.Store
-	Version         string
-	AccountPool     *router.AccountPool
-	RoutingProfiles []router.RoutingProfile
-	LocalBackend    string
-	LocalEndpoint   string
-	TokenSaver      bool
+	Addr                  string
+	Token                 string
+	AllowedHosts          []string
+	Adapter               backend.Adapter
+	Catalog               *catalog.Catalog
+	UserConfig            *home.Config
+	Residency             *residency.Manager
+	TraceStore            *trace.Store
+	Version               string
+	AccountPool           *router.AccountPool
+	AccountConfigPath     string
+	ConfigPath            string
+	StorePath             string
+	ServiceStatus         func() (*service.StatusResult, error)
+	RuntimeDetectHardware func() (hw.Info, error)
+	RuntimeFreeBytes      func(string) (uint64, error)
+	RoutingProfiles       []router.RoutingProfile
+	LocalBackend          string
+	LocalEndpoint         string
+	TokenSaver            bool
 }
 
 // Server is the OpenAI-compatible loopback HTTP server.
 type Server struct {
-	cfg        ServerConfig
-	httpServer *http.Server
-	listener   net.Listener
-	proxy      *router.ProxyHandler
+	cfg                     ServerConfig
+	httpServer              *http.Server
+	listener                net.Listener
+	proxy                   *router.ProxyHandler
+	managementLoginMu       sync.Mutex
+	managementLoginSessions map[string]*managementLoginSession
+	managementLoginWG       sync.WaitGroup
+	runtimeMutationMu       sync.Mutex
+	modelJobsMu             sync.Mutex
+	modelJobs               map[string]*managementModelPullJob
+	modelJobsWG             sync.WaitGroup
+	knowledgeJobsMu         sync.Mutex
+	knowledgeJobs           map[string]*managementKnowledgeJob
+	knowledgeJobsWG         sync.WaitGroup
+	evalJobsMu              sync.Mutex
+	evalJobs                map[string]*managementEvalJob
+	evalJobsWG              sync.WaitGroup
+	forgeMutationMu         sync.Mutex
 }
 
 // NewServer constructs the gateway server with security middleware and routes.
@@ -83,7 +105,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	mux := http.NewServeMux()
-	s := &Server{cfg: cfg}
+	s := &Server{
+		cfg:                     cfg,
+		managementLoginSessions: make(map[string]*managementLoginSession),
+		modelJobs:               make(map[string]*managementModelPullJob),
+		knowledgeJobs:           make(map[string]*managementKnowledgeJob),
+		evalJobs:                make(map[string]*managementEvalJob),
+	}
 
 	if cfg.AccountPool != nil {
 		s.proxy = router.NewProxyHandler(cfg.AccountPool, cfg.TokenSaver)
@@ -102,6 +130,57 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /manage-ui/", s.handleManagementUI)
+	mux.HandleFunc("GET /manage-ui/app.js", s.handleManagementUI)
+	mux.HandleFunc("GET /manage-ui/style.css", s.handleManagementUI)
+	mux.HandleFunc("GET /manage/v1/providers", s.handleManagementProviders)
+	mux.HandleFunc("GET /manage/v1/accounts", s.handleManagementAccounts)
+	mux.HandleFunc("GET /manage/v1/profiles", s.handleManagementProfiles)
+	mux.HandleFunc("PUT /manage/v1/profiles/{id}", s.handleManagementPutProfile)
+	mux.HandleFunc("DELETE /manage/v1/profiles/{id}", s.handleManagementDeleteProfile)
+	mux.HandleFunc("POST /manage/v1/accounts", s.handleManagementAddAccount)
+	mux.HandleFunc("POST /manage/v1/accounts/{id}/test", s.handleManagementTestAccount)
+	mux.HandleFunc("POST /manage/v1/accounts/{id}/models/refresh", s.handleManagementRefreshModels)
+	mux.HandleFunc("POST /manage/v1/accounts/{id}/login", s.handleManagementStartLogin)
+	mux.HandleFunc("GET /manage/v1/accounts/{id}/login/{session}", s.handleManagementLoginStatus)
+	mux.HandleFunc("DELETE /manage/v1/accounts/{id}/login/{session}", s.handleManagementCancelLogin)
+	mux.HandleFunc("GET /manage/v1/runtime", s.handleManagementRuntime)
+	mux.HandleFunc("PUT /manage/v1/runtime/backend", s.handleManagementSelectBackend)
+	mux.HandleFunc("PUT /manage/v1/runtime/profile", s.handleManagementSelectProfile)
+	mux.HandleFunc("GET /manage/v1/models", s.handleManagementModels)
+	mux.HandleFunc("GET /manage/v1/model-catalog", s.handleManagementModelCatalog)
+	mux.HandleFunc("POST /manage/v1/model-pull-jobs", s.handleManagementStartModelPull)
+	mux.HandleFunc("GET /manage/v1/model-pull-jobs", s.handleManagementModelPullJobs)
+	mux.HandleFunc("GET /manage/v1/model-pull-jobs/{id}", s.handleManagementModelPullStatus)
+	mux.HandleFunc("DELETE /manage/v1/model-pull-jobs/{id}", s.handleManagementCancelModelPull)
+	mux.HandleFunc("POST /manage/v1/models/{id}/deletion", s.handleManagementDeleteModel)
+	mux.HandleFunc("POST /manage/v1/models/{id}/unload", s.handleManagementUnloadModel)
+	mux.HandleFunc("GET /manage/v1/knowledge", s.handleManagementKnowledge)
+	mux.HandleFunc("POST /manage/v1/knowledge/index-jobs", s.handleManagementStartIndex)
+	mux.HandleFunc("GET /manage/v1/knowledge/index-jobs", s.handleManagementIndexJobs)
+	mux.HandleFunc("GET /manage/v1/knowledge/index-jobs/{id}", s.handleManagementIndexStatus)
+	mux.HandleFunc("DELETE /manage/v1/knowledge/index-jobs/{id}", s.handleManagementCancelIndex)
+	mux.HandleFunc("POST /manage/v1/knowledge/search", s.handleManagementKnowledgeSearch)
+	mux.HandleFunc("GET /manage/v1/skills", s.handleManagementSkills)
+	mux.HandleFunc("POST /manage/v1/skills", s.handleManagementInstallSkill)
+	mux.HandleFunc("GET /manage/v1/skills/{name}", s.handleManagementSkill)
+	mux.HandleFunc("GET /manage/v1/skills/{name}/validation", s.handleManagementSkillValidation)
+	mux.HandleFunc("DELETE /manage/v1/skills/{name}", s.handleManagementRemoveSkill)
+	mux.HandleFunc("GET /manage/v1/mcp", s.handleManagementMCPInventory)
+	mux.HandleFunc("GET /manage/v1/traces", s.handleManagementTraceSummaries)
+	mux.HandleFunc("GET /manage/v1/evaluation-suites", s.handleManagementEvaluationSuites)
+	mux.HandleFunc("POST /manage/v1/evaluation-jobs", s.handleManagementStartEvaluation)
+	mux.HandleFunc("GET /manage/v1/evaluation-jobs", s.handleManagementEvaluationJobs)
+	mux.HandleFunc("GET /manage/v1/evaluation-jobs/{id}", s.handleManagementEvaluationStatus)
+	mux.HandleFunc("DELETE /manage/v1/evaluation-jobs/{id}", s.handleManagementCancelEvaluation)
+	mux.HandleFunc("GET /manage/v1/forge/candidates", s.handleManagementForgeCandidates)
+	mux.HandleFunc("POST /manage/v1/forge/candidates/{id}/validation", s.handleManagementValidateCandidate)
+	mux.HandleFunc("POST /manage/v1/forge/candidates/{id}/evaluation", s.handleManagementEvaluateCandidate)
+	mux.HandleFunc("POST /manage/v1/forge/candidates/{id}/promotion", s.handleManagementPromoteCandidate)
+	mux.HandleFunc("DELETE /manage/v1/forge/candidates/{id}", s.handleManagementDiscardCandidate)
+	mux.HandleFunc("GET /manage/v1/service", s.handleManagementServiceStatus)
+	mux.HandleFunc("PUT /manage/v1/accounts/{id}", s.handleManagementUpdateAccount)
+	mux.HandleFunc("DELETE /manage/v1/accounts/{id}", s.handleManagementRemoveAccount)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("GET /v1/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
@@ -116,6 +195,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// Wrap with security middleware: DNS rebinding protection and Bearer token auth
 	var handler http.Handler = mux
 	handler = AuthMiddleware(cfg.Token, InferenceAuthConfig{Profiles: cfg.RoutingProfiles, Accounts: accounts, Pool: cfg.AccountPool, LocalBackend: cfg.LocalBackend, LocalEndpoint: cfg.LocalEndpoint})(handler)
+	handler = ManagementOriginMiddleware()(handler)
 	handler = HostValidationMiddleware(cfg.AllowedHosts)(handler)
 
 	s.httpServer = &http.Server{
@@ -153,13 +233,57 @@ func (s *Server) Addr() string {
 
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	var shutdownErr error
+	if s.httpServer != nil {
+		shutdownErr = s.httpServer.Shutdown(ctx)
+	}
+	s.managementLoginMu.Lock()
+	for _, session := range s.managementLoginSessions {
+		if session.cancel != nil {
+			session.cancel()
+		}
+	}
+	s.managementLoginMu.Unlock()
+	s.modelJobsMu.Lock()
+	for _, job := range s.modelJobs {
+		if job.cancel != nil {
+			job.cancel()
+		}
+	}
+	s.modelJobsMu.Unlock()
+	s.knowledgeJobsMu.Lock()
+	for _, job := range s.knowledgeJobs {
+		if job.cancel != nil {
+			job.cancel()
+		}
+	}
+	s.knowledgeJobsMu.Unlock()
+	s.evalJobsMu.Lock()
+	for _, job := range s.evalJobs {
+		if job.cancel != nil {
+			job.cancel()
+		}
+	}
+	s.evalJobsMu.Unlock()
+	loginsDone := make(chan struct{})
+	go func() {
+		s.managementLoginWG.Wait()
+		s.modelJobsWG.Wait()
+		s.knowledgeJobsWG.Wait()
+		s.evalJobsWG.Wait()
+		close(loginsDone)
+	}()
+	select {
+	case <-loginsDone:
+	case <-ctx.Done():
+		if shutdownErr == nil {
+			shutdownErr = ctx.Err()
+		}
+	}
 	if s.cfg.Residency != nil {
 		_ = s.cfg.Residency.Close()
 	}
-	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
-	}
-	return nil
+	return shutdownErr
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
