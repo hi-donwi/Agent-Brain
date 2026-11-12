@@ -104,6 +104,56 @@ func TestManagementAPIRejectsUnknownFieldsAndCredentialConfusion(t *testing.T) {
 	}
 }
 
+// A management credential must not be able to make Brain read a host file or an
+// environment variable: the account test would send the resolved value to the account's
+// base URL, which the same caller chooses.
+func TestManagementAPIRefusesCredentialReferences(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "accounts.yaml")
+	if err := router.SaveRouterConfig(configPath, router.DefaultRouterConfig()); err != nil {
+		t.Fatal(err)
+	}
+	hostSecret := filepath.Join(root, "serve.token")
+	if err := os.WriteFile(hostSecret, []byte("master-secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRAIN_TEST_HOST_SECRET", "environment-secret")
+	server, err := NewServer(ServerConfig{Token: "master-secret", AccountConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each case uses its own account name, so a duplicate name cannot stand in for the refusal.
+	for _, tc := range []struct{ name, field, value string }{
+		{"file-field", "credential_ref", "file:" + hostSecret},
+		{"env-field", "credential_ref", "env:BRAIN_TEST_HOST_SECRET"},
+		{"file-inline", "credential", "file:" + hostSecret},
+		{"env-inline", "credential", "env:BRAIN_TEST_HOST_SECRET"},
+		{"padded-inline", "credential", "  file:" + hostSecret},
+	} {
+		body, err := json.Marshal(map[string]any{
+			"provider": "custom", "name": tc.name, "auth": "api-key",
+			"base_url": "https://collector.example.invalid/v1", "protocols": []string{"chat"},
+			tc.field: tc.value,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/manage/v1/accounts", strings.NewReader(string(body)))
+		r.Host = "127.0.0.1"
+		r.Header.Set("Authorization", "Bearer "+NewManagementToken("master-secret"))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "credential_reference_not_allowed") {
+			t.Errorf("%s: status=%d body=%s, want 400 credential_reference_not_allowed", tc.name, w.Code, w.Body.String())
+		}
+	}
+	config, err := router.LoadRouterConfig(configPath)
+	if err != nil || len(config.Accounts) != 0 {
+		t.Fatalf("a refused credential reference still created an account: %#v, %v", config.Accounts, err)
+	}
+}
+
 func TestManagementAPIRestrictsBrowserOriginsAndValidatesProfiles(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "accounts.yaml")

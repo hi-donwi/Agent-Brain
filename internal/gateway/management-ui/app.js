@@ -85,7 +85,6 @@ function updateProviderFields() {
   auth.innerHTML = supported.map((item) => `<option value="${escapeHTML(item)}">${escapeHTML(item)}</option>`).join('');
   auth.value = supported.includes('api-key') ? 'api-key' : (supported[0] ?? 'api-key');
   $('#credential').disabled = auth.value !== 'api-key';
-  $('#credential-ref').disabled = auth.value !== 'api-key';
   $('#credential').required = false;
   $('#base-url').value = provider?.base_url ?? '';
 }
@@ -484,23 +483,16 @@ $('#disconnect').addEventListener('click', () => {
 
 $('#provider').addEventListener('change', updateProviderFields);
 $('#credential').addEventListener('input', () => $('#credential').setCustomValidity(''));
-$('#credential-ref').addEventListener('input', () => $('#credential-ref').setCustomValidity(''));
 
 $('#add-account').addEventListener('submit', (event) => {
   event.preventDefault();
   const provider = state.providers.find((item) => item.id === $('#provider').value);
   if (!provider) return;
   const credential = $('#credential').value;
-  const reference = $('#credential-ref').value.trim();
   const auth = $('#auth').value;
-  if (auth === 'api-key' && !credential && !reference) {
-    $('#credential-ref').setCustomValidity('Enter a provider API key or a Brain credential reference.');
-    $('#credential-ref').reportValidity();
-    return;
-  }
-  if (credential && reference) {
-    $('#credential-ref').setCustomValidity('Use either a provider API key or a Brain credential reference, not both.');
-    $('#credential-ref').reportValidity();
+  if (auth === 'api-key' && !credential) {
+    $('#credential').setCustomValidity('Enter a provider API key.');
+    $('#credential').reportValidity();
     return;
   }
   const body = {
@@ -508,7 +500,6 @@ $('#add-account').addEventListener('submit', (event) => {
     name: $('#name').value.trim(),
     auth,
     ...(auth === 'api-key' && credential ? { credential } : {}),
-    ...(auth === 'api-key' && reference ? { credential_ref: reference } : {}),
     ...(auth === 'api-key' && $('#base-url').value.trim() ? { base_url: $('#base-url').value.trim() } : {}),
     ...(auth === 'oauth' ? { managed_bridge: true } : {}),
     priority: Number($('#priority').value || 0),
@@ -517,7 +508,6 @@ $('#add-account').addEventListener('submit', (event) => {
   void run(async () => {
     await request('/accounts', { method: 'POST', body });
     $('#credential').value = '';
-    $('#credential-ref').value = '';
     await loadAll();
   }, 'Account added. Restart the gateway to apply routing changes.');
 });

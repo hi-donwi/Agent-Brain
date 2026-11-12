@@ -54,9 +54,7 @@
           <select id="auth"></select>
           <label for="credential">Provider API key <span class="optional">(write-only)</span></label>
           <input id="credential" type="password" autocomplete="new-password" spellcheck="false">
-          <p class="hint">The key is sent directly to Brain and stored in Brain's private credential directory.</p>
-          <label for="credential-ref">Or Brain credential reference</label>
-          <input id="credential-ref" placeholder="env:PROVIDER_KEY or file:/absolute/path" autocomplete="off">
+          <p class="hint">The key is sent directly to Brain and stored in Brain's private credential directory. Environment and file references are configured on the Brain host with <code>brain accounts add --key</code>.</p>
           <label for="base-url">Provider base URL</label>
           <input id="base-url" type="url" autocomplete="url">
           <label for="priority">Routing priority</label>

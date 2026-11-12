@@ -21,7 +21,10 @@ in an owner-only file, and accepted only by management routes. They are distinct
 the master and inference/account-scoped credentials; rotating the master invalidates
 them. The management API returns redacted account/provider data and never returns
 resolved provider or bridge credentials. Mutations reuse Brain's validated account
-service and private secret storage. Credential inputs are write-only.
+service and private secret storage. Credential inputs are write-only and literal:
+the API refuses `env:` and `file:` references, because resolving one reads the Brain
+host on behalf of a remote caller who also chooses the account's base URL. References
+stay a local CLI feature.
 
 Agent-Control embeds a Brain-origin management UI; the management API is same-origin
 only. The browser must use the configured Brain endpoint and a management credential

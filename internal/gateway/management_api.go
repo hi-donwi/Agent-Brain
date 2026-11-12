@@ -166,11 +166,19 @@ func (s *Server) loadManagementRouterConfig() (router.RouterConfig, error) {
 	return router.LoadRouterConfig(s.cfg.AccountConfigPath)
 }
 
+// isCredentialReference reports whether the account service would resolve value as an
+// env: or file: reference instead of storing it as a literal secret.
+func isCredentialReference(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "env:") || strings.HasPrefix(value, "file:")
+}
+
 type managementAddAccount struct {
-	Provider      string   `json:"provider"`
-	Name          string   `json:"name"`
-	Auth          string   `json:"auth"`
-	Credential    string   `json:"credential,omitempty"`
+	Provider   string `json:"provider"`
+	Name       string `json:"name"`
+	Auth       string `json:"auth"`
+	Credential string `json:"credential,omitempty"`
+	// CredentialRef is decoded only so the request is refused with a stable error code.
 	CredentialRef string   `json:"credential_ref,omitempty"`
 	BaseURL       string   `json:"base_url,omitempty"`
 	Tier          string   `json:"tier,omitempty"`
@@ -191,7 +199,15 @@ func (s *Server) handleManagementAddAccount(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusBadRequest, "invalid account request", "invalid_request_error", "bad_request")
 		return
 	}
-	if len(input.Credential) > 4095 || (input.Credential != "" && input.CredentialRef != "") || strings.ContainsAny(input.Credential, "\r\n\x00") {
+	// A reference makes Brain read a host file or an environment variable, and the account
+	// test then sends the resolved value to the base URL this same caller chose. References
+	// are therefore configured only with the local Brain CLI. The account service also
+	// treats an inline value with a reference prefix as a reference, so that is refused too.
+	if input.CredentialRef != "" || isCredentialReference(input.Credential) {
+		writeAPIError(w, http.StatusBadRequest, "credential references are configured with the Brain CLI", "invalid_request_error", "credential_reference_not_allowed")
+		return
+	}
+	if len(input.Credential) > 4095 || strings.ContainsAny(input.Credential, "\r\n\x00") {
 		writeAPIError(w, http.StatusBadRequest, "invalid credential input", "invalid_request_error", "bad_request")
 		return
 	}
@@ -202,29 +218,21 @@ func (s *Server) handleManagementAddAccount(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusBadRequest, "this authentication flow must be completed with the Brain CLI", "invalid_request_error", "unsupported_auth_flow")
 		return
 	}
-	if input.Auth == router.AuthOAuth && (!input.ManagedBridge || input.Credential != "" || input.CredentialRef != "" || input.BaseURL != "") {
+	if input.Auth == router.AuthOAuth && (!input.ManagedBridge || input.Credential != "" || input.BaseURL != "") {
 		writeAPIError(w, http.StatusBadRequest, "OAuth accounts must use Brain's isolated managed bridge", "invalid_request_error", "invalid_oauth_account")
 		return
 	}
-	if input.Auth == router.AuthNative && (input.ManagedBridge || input.Credential != "" || input.CredentialRef != "" || input.BaseURL != "") {
+	if input.Auth == router.AuthNative && (input.ManagedBridge || input.Credential != "" || input.BaseURL != "") {
 		writeAPIError(w, http.StatusBadRequest, "native accounts use their installed official CLI", "invalid_request_error", "invalid_native_account")
 		return
 	}
-	if input.CredentialRef != "" && !strings.HasPrefix(input.CredentialRef, "env:") && !strings.HasPrefix(input.CredentialRef, "file:") {
-		writeAPIError(w, http.StatusBadRequest, "credential references must use env: or file:", "invalid_request_error", "bad_request")
-		return
-	}
-	if (input.Auth == router.AuthNone || input.Auth == router.AuthNative) && (input.Credential != "" || input.CredentialRef != "") {
+	if (input.Auth == router.AuthNone || input.Auth == router.AuthNative) && input.Credential != "" {
 		writeAPIError(w, http.StatusBadRequest, "credentials are not supported for this authentication mode", "invalid_request_error", "bad_request")
 		return
 	}
-	credential := input.Credential
-	if input.CredentialRef != "" {
-		credential = input.CredentialRef
-	}
 	service := router.AccountService{Path: s.cfg.AccountConfigPath}
 	account, err := service.Add(r.Context(), router.Account{
-		Provider: input.Provider, Name: input.Name, Auth: input.Auth, APIKey: credential, ManagedBridge: input.ManagedBridge,
+		Provider: input.Provider, Name: input.Name, Auth: input.Auth, APIKey: input.Credential, ManagedBridge: input.ManagedBridge,
 		BaseURL: input.BaseURL, Tier: input.Tier, Priority: input.Priority, Weight: input.Weight,
 		Models: input.Models, Protocols: input.Protocols,
 	})

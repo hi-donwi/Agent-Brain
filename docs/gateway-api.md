@@ -109,8 +109,11 @@ browser API calls are refused. The Brain-origin console is embedded by Agent-Con
 only from explicitly configured endpoints. Non-browser clients may omit `Origin`,
 but still require the management credential. Management responses are
 `no-store`; account credential values and references, bridge secrets, backend tokens,
-and raw credentials are never serialized. Account creation accepts a credential in a
-write-only request field or an `env:`/absolute `file:` reference. OAuth login is
+and raw credentials are never serialized. Account creation accepts a literal credential
+in a write-only request field only. An `env:` or `file:` reference, in `credential_ref`
+or as the credential value itself, is refused with `credential_reference_not_allowed`:
+Brain would resolve it on the host and send the value to a base URL the same caller
+chose. References are configured with the local CLI (`brain accounts add --key`). OAuth login is
 supported for Antigravity/Codex accounts using isolated managed bridges; the browser sees
 the validated provider authorization URL (including its protocol state), but no bridge
 management credential or provider token. Native login
