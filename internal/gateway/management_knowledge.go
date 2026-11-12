@@ -124,7 +124,14 @@ func (s *Server) handleManagementKnowledge(w http.ResponseWriter, r *http.Reques
 	}
 	byName := make(map[string]store.CollectionSummary, len(summaries))
 	collections := make([]map[string]any, 0, len(summaries))
+	registeredCollections := make(map[string]struct{}, len(config.KnowledgeSources))
+	for _, source := range config.KnowledgeSources {
+		registeredCollections[source.Collection] = struct{}{}
+	}
 	for _, summary := range summaries {
+		if _, ok := registeredCollections[summary.Collection.Name]; !ok {
+			continue
+		}
 		byName[summary.Collection.Name] = summary
 		collections = append(collections, map[string]any{
 			"name": summary.Collection.Name, "model": summary.Collection.Model,

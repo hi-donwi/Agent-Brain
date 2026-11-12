@@ -13,6 +13,7 @@ import (
 	"github.com/hi-donwi/Agent-Brain/internal/backend"
 	"github.com/hi-donwi/Agent-Brain/internal/catalog"
 	"github.com/hi-donwi/Agent-Brain/internal/home"
+	"github.com/hi-donwi/Agent-Brain/internal/store"
 )
 
 type knowledgeTestAdapter struct {
@@ -79,14 +80,26 @@ func TestManagementKnowledgeListsReindexesAndSearchesOnlyRegisteredSources(t *te
 	if err := home.SaveConfig(configPath, config); err != nil {
 		t.Fatal(err)
 	}
+	dbPath := filepath.Join(brainHome, "brain.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateCollection(context.Background(), "unregistered_docs", "private-embed-model", 4); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 	adapter := &knowledgeTestAdapter{runtimeTestAdapter: &runtimeTestAdapter{
 		name: "ollama", endpoint: "http://127.0.0.1:11434",
 		models: []backend.ModelInfo{{Name: "nomic-embed-text"}},
 	}}
-	server := newKnowledgeTestServer(t, configPath, filepath.Join(brainHome, "brain.db"), config, adapter)
+	server := newKnowledgeTestServer(t, configPath, dbPath, config, adapter)
 
 	listed := managementRequest(server, http.MethodGet, "/manage/v1/knowledge", "")
-	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), canonicalRoot) {
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), canonicalRoot) || strings.Contains(listed.Body.String(), "unregistered_docs") || strings.Contains(listed.Body.String(), "private-embed-model") {
 		t.Fatalf("knowledge source listing leaked its filesystem root: status=%d body=%s", listed.Code, listed.Body.String())
 	}
 	var sources struct {
