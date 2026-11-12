@@ -122,16 +122,22 @@ func (s *Server) runManagementLogin(ctx context.Context, session *managementLogi
 		return
 	}
 	s.managementLoginMu.Lock()
-	session.state = state
-	session.authorizationURL = authorizationURL
-	session.status = "pending"
+	cancelled := ctx.Err() != nil || session.status == "canceling"
+	if !cancelled {
+		session.state = state
+		session.authorizationURL = authorizationURL
+		session.status = "pending"
+	}
 	s.managementLoginMu.Unlock()
+	if cancelled {
+		cancelManagementOAuthState(bridge, state)
+		s.finishManagementLogin(session, "cancelled", "", nil)
+		return
+	}
 
 	identity, err := bridge.WaitLogin(ctx, account.Provider, state)
 	if err != nil {
-		cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = bridge.CancelLogin(cleanup, state)
-		cancel()
+		cancelManagementOAuthState(bridge, state)
 		status := "failed"
 		if errors.Is(ctx.Err(), context.Canceled) {
 			status = "cancelled"
@@ -139,9 +145,11 @@ func (s *Server) runManagementLogin(ctx context.Context, session *managementLogi
 		s.finishManagementLogin(session, status, "provider_login_failed", nil)
 		return
 	}
-	s.managementLoginMu.Lock()
-	session.status = "completing"
-	s.managementLoginMu.Unlock()
+	if !s.beginManagementLoginCompletion(ctx, session) {
+		cancelManagementOAuthState(bridge, state)
+		s.finishManagementLogin(session, "cancelled", "", nil)
+		return
+	}
 	persistCtx, persistCancel := managementPersistenceContext()
 	identityErr := s.saveOAuthIdentity(persistCtx, account, identity)
 	persistCancel()
@@ -169,6 +177,22 @@ func (s *Server) runManagementLogin(ctx context.Context, session *managementLogi
 
 func managementPersistenceContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+
+func (s *Server) beginManagementLoginCompletion(ctx context.Context, session *managementLoginSession) bool {
+	s.managementLoginMu.Lock()
+	defer s.managementLoginMu.Unlock()
+	if ctx.Err() != nil || session.status == "canceling" {
+		return false
+	}
+	session.status = "completing"
+	return true
+}
+
+func cancelManagementOAuthState(bridge router.BridgeClient, state string) {
+	cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = bridge.CancelLogin(cleanup, state)
 }
 
 func (s *Server) saveOAuthIdentity(ctx context.Context, original router.Account, identity string) error {
@@ -235,7 +259,7 @@ func (s *Server) handleManagementCancelLogin(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, http.StatusNotFound, "OAuth login session not found", "invalid_request_error", "not_found")
 		return
 	}
-	if isActiveLoginStatus(session.status) {
+	if session.status == "starting" || session.status == "pending" {
 		session.status = "canceling"
 		if session.cancel != nil {
 			session.cancel()

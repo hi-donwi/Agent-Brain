@@ -526,3 +526,45 @@ func TestManagementOAuthCancelRevokesPendingBridgeState(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestManagementOAuthCancelDoesNotCancelCompletingLogin(t *testing.T) {
+	server, err := NewServer(ServerConfig{Token: "gateway-master"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(context.Background())
+	var cancelCalled atomic.Bool
+	session := &managementLoginSession{
+		id: "completing-session", accountID: "oauth-account", status: "completing",
+		cancel: func() { cancelCalled.Store(true) },
+	}
+	server.managementLoginMu.Lock()
+	server.managementLoginSessions[session.id] = session
+	server.managementLoginMu.Unlock()
+
+	response := managementRequest(server, http.MethodDelete, "/manage/v1/accounts/oauth-account/login/completing-session", "")
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"status":"completing"`) {
+		t.Fatalf("cancelling an already-completing login changed its state: %d %s", response.Code, response.Body.String())
+	}
+	if cancelCalled.Load() {
+		t.Fatal("cancelling an already-completing login cancelled its persistence context")
+	}
+}
+
+func TestManagementLoginCompletionHonorsPriorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	session := &managementLoginSession{status: "canceling"}
+	server := &Server{}
+	if server.beginManagementLoginCompletion(ctx, session) {
+		t.Fatal("a cancelled OAuth session entered completion")
+	}
+	if session.status != "canceling" {
+		t.Fatalf("cancelled OAuth session status = %q, want canceling", session.status)
+	}
+
+	active := &managementLoginSession{status: "pending"}
+	if !server.beginManagementLoginCompletion(context.Background(), active) || active.status != "completing" {
+		t.Fatalf("active OAuth session did not atomically enter completion: %q", active.status)
+	}
+}
