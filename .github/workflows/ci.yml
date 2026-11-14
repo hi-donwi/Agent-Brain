@@ -65,11 +65,11 @@ jobs:
   # Secret and dependency gate via the pinned Agent-Secure engine, the same pin
   # the sibling Go repositories use.
   agent-secure:
-    uses: hi-donwi/Agent-Secure/.github/workflows/agent-secure-gate.yml@1dffc4ca7e00bb4e9aa108603fcf02cfeb1637a8
+    uses: hi-donwi/Agent-Secure/.github/workflows/agent-secure-gate.yml@458f9e5d9f0ba9bc626999116451e316b2626e04
     with:
       root: .
-      engine_version: v0.1.5
-      engine_sha256: 491c0f4b9b4fe379b13f85be0a8956343a6731694e714763d33b3827e65649c9
+      engine_version: v0.1.6
+      engine_sha256: 8259bb64d1aa685db4da43888d0ed5b01e32f8df19905ea20fd852a3d8498c28
       gitleaks_version: 8.30.1
       gitleaks_sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       osv_scanner_version: 2.5.1
